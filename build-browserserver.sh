@@ -23,11 +23,16 @@ def block(t,n):
             d-=1
             if d==0: return i, t.index(';',k)+1
         k+=1
+BANNER=('/* !!! GENERATED FILE - DO NOT EDIT !!!\n'
+        ' * Auto-merged by atlas-wpe-env/build-browserserver.sh from the CANONICAL source:\n'
+        ' *   ~/Documents/GitHub/atlas-wpe-backend/BrowserPageWPE.{cpp,h}  (class BrowserPageWPE)\n'
+        ' * This copy renames the class to BrowserPage and is OVERWRITTEN on every build.\n'
+        ' * Edit the canonical BrowserPageWPE.* instead; changes here are lost. */\n\n')
 orig=open(f'{BS}/Src/BrowserPage.h').read(); wpe=open(f'{WPE}/backend-atlas/BrowserPageWPE.h').read()
 o0,o1=block(orig,'BrowserPage'); w0,w1=block(wpe,'BrowserPageWPE')
 wc=wpe[w0:w1].replace('BrowserPageWPE','BrowserPage')
-open(f'{SRC}/BrowserPage.h','w').write(orig[:o0]+'#include <wpe/webkit.h>\n#include <semaphore.h>\n\n'+wc+orig[o1:])
-open(f'{SRC}/BrowserPage.cpp','w').write(open(f'{WPE}/backend-atlas/BrowserPageWPE.cpp').read().replace('BrowserPageWPE','BrowserPage'))
+open(f'{SRC}/BrowserPage.h','w').write(BANNER+orig[:o0]+'#include <wpe/webkit.h>\n#include <semaphore.h>\n\n'+wc+orig[o1:])
+open(f'{SRC}/BrowserPage.cpp','w').write(BANNER+open(f'{WPE}/backend-atlas/BrowserPageWPE.cpp').read().replace('BrowserPageWPE','BrowserPage'))
 PYMERGE
 SI=$DS/build-deps/staging/include
 CF=$(pkg-config --cflags wpe-webkit-2.0 wpe-1.0 glib-2.0 2>/dev/null)
