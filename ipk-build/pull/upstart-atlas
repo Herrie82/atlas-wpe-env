@@ -1,0 +1,14 @@
+# Atlas Browser engine server (atlas) -- autostart, mirrors isisbrowser
+start on stopped fontconfig_cache
+stop on started start_update
+description "Atlas BrowserServer (atlas)"
+
+script
+    export BROWSERSERVER_NAME=atlas
+    cd /media/cryptofs/apps/usr/palm/applications/org.webosports.app.atlas/deviceroot/atlas
+    rm -f /tmp/yapserver.atlas*
+    exec ./BrowserServer -platform qbs
+end script
+
+respawn
+respawn limit 0 0

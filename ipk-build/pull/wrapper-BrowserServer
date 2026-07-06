@@ -1,0 +1,41 @@
+#!/bin/sh
+# WPE 2.52 ATLAS BrowserServer boot wrapper (org.webosports.app.atlas). Exec'd by the `atlas` upstart job.
+# Runs the engine IN PLACE from the app's cryptofs deviceroot — NOTHING is copied to /media/internal.
+case "$*" in *offscreen*) exit 0 ;; esac
+i=0; while [ $i -lt 90 ] && ! ps -ef 2>/dev/null | grep -q '[L]unaSysMgr'; do sleep 1; i=$((i+1)); done
+sleep 3
+mount -o remount,size=131072k /dev 2>/dev/null
+unset LD_PRELOAD
+# Derive our own location so the engine root moves with the app (this wrapper lives at $DR/atlas/BrowserServer).
+ATLAS=$(cd "$(dirname "$0")" && pwd); DR=$(cd "$ATLAS/.." && pwd); D=$DR/wpe-252
+cp -f $D/lib/libWPEBackend-atlas.so $D/lib/libWPEBackend-default.so 2>/dev/null
+export BPWPE_DEBUG=1
+export LD_LIBRARY_PATH=$D/lib:$ATLAS:/usr/lib/ssl11:/usr/lib:/lib
+export WPE_BACKEND_LIBRARY=$D/lib/libWPEBackend-atlas.so
+export QT_QPA_PLATFORM=Minimal QT_QPA_PLATFORM_PLUGIN_PATH=/usr/plugins/platforms QT_PLUGIN_PATH=/usr/plugins
+export FONTCONFIG_FILE=$D/fonts.conf GIO_MODULE_DIR=$D/lib/gio/modules GIO_USE_TLS=openssl SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+export JSC_useDFGJIT=true
+export WEBKIT_USE_SINGLE_WEB_PROCESS=1
+# --- Phase 1 low-RAM / low-end perf tuning (upstream WPE 2.52, Cairo/Nicosia build) ---
+export JSC_forceRAMSize=268435456         # bias JS heaps to a ~256MB budget -> smaller heaps, earlier GC
+export WEBKIT_EGL_PIXEL_LAYOUT=RGB565      # 16bpp tiles/framebuffer: ~halves GPU/tile memory + bandwidth
+export WEBKIT_NICOSIA_PAINTING_THREADS=1   # don't oversubscribe the 2 cores (Cairo/Nicosia raster)
+export MALLOC_ARENA_MAX=2                  # cap glibc per-thread arenas (GStreamer/fontconfig side)
+ulimit -c unlimited
+cd $ATLAS
+rm -f /tmp/yapserver.atlas*
+export GST_PLUGIN_SYSTEM_PATH=$D/lib/gstreamer-1.0
+export GST_OMX_CONFIG_DIR=$D
+export GST_PLUGIN_SCANNER=$D/libexec/gstreamer-1.0/gst-plugin-scanner
+export GST_REGISTRY=/tmp/atlas-gstreg.bin
+export GST_DEBUG=2,webkitregistryscanner:6,omxvideodec:4
+export XDG_DATA_DIRS=$D/share:/usr/share
+export GST_OMX_ATLAS_COPY_OUTPUT=1         # reconfigure-safe DPB pmem (copy-mode, no OMX_UseBuffer)
+export ATLAS_MDPDETILE=1                   # HW de-tile via MDP rotator
+export ATLAS_MDP_NOSWAP=1                  # decoder emits CbCr NV12 already -> no chroma swap in de-tile copy-out
+# Repoint the baked install-prefix resource dirs at cryptofs: libWPEWebKit's PKGLIBEXECDIR/PKGLIBDIR were
+# prefix-patched for the old /media/internal layout, so without these the WebProcess + injected bundle
+# would be looked up under /media/internal (which we no longer populate).
+export WEBKIT_EXEC_PATH=$D/libexec/wpe-webkit-2.0
+export WEBKIT_INJECTED_BUNDLE_PATH=$D/lib/wpe-webkit-2.0/injected-bundle
+exec $D/BrowserServer-atlas -platform Minimal >/tmp/bs-atlas.log 2>&1
