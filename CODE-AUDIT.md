@@ -87,24 +87,24 @@ new path, else → `enterFsResize()`, which **immediately returns** unless `/tmp
 
 ---
 
-## GROUP C — Real fixes (bugs / inconsistencies, RISK: low)
+## GROUP C — Real fixes (bugs / inconsistencies, RISK: low) — ✅ DONE 2026-07-07
 
-- [ ] **ATLAS_DESKTOP rename bug** — `Settings.cpp:50` uses `#ifdef ATLAS_DESKTOP` (renamed from
-  `ISIS_DESKTOP` in commit `456bf53`) but `BrowserServer/Src/Makefile.Ubuntu:55` still passes
-  `-DISIS_DESKTOP`. Nothing defines `ATLAS_DESKTOP` → the desktop config block (`~/.atlas` paths) is silently
-  dead in that build. Fix the Makefile flag (or drop the desktop build if unused). Only matters if the
-  Ubuntu/host build is still used; the device build (`build-browserserver.sh`) is unaffected.
-- [ ] **`launchbs-252.sh:10`** — stale hardcoded `/media/internal/wpe-238/fonts.conf` (old wpe-238 layout;
-  everything else moved to the cryptofs `wpe-252` deviceroot). Also the script is broadly superseded by
-  `ipk-build/pull/wrapper-BrowserServer` (the shipped boot wrapper), which sets the full GStreamer/JIT/RAM
-  env launchbs lacks. Update the path or retire the script.
-- [ ] **Stale comment** — `BrowserPageWPE.cpp:2270` `mouseEvent` TODO "map content→view coords … once
-  setScrollPosition is wired" — scroll **is** wired now; the comment is outdated.
-- [ ] **`deploy-252.sh` tail** (`:48,79-88`) — writes an `OUT/run.sh` that execs `frame-dump`, not
-  `BrowserServer-atlas`; vestigial standalone-harness era. The real runtime is BS via wrapper + ipk-postinst.
-  Trim or clearly label as the frame-dump repro harness only.
-- [ ] **`upstart-atlas`** runs `./BrowserServer -platform qbs` while the wrapper actually execs
-  `BrowserServer-atlas -platform Minimal` (arg ignored) — vestigial `qbs` arg, harmless.
+- [x] **ATLAS_DESKTOP rename bug** — `Settings.cpp:50` uses `#ifdef ATLAS_DESKTOP` (renamed from
+  `ISIS_DESKTOP` in commit `456bf53`) but `BrowserServer/Src/Makefile.Ubuntu:55` still passed
+  `-DISIS_DESKTOP`. **FIXED (a):** Makefile.Ubuntu now passes `-DATLAS_DESKTOP`. (Committed, BrowserServer repo.)
+- [x] **`launchbs-252.sh:10`** — stale hardcoded `/media/internal/wpe-238/fonts.conf`. **FIXED (a):** dead
+  fallback line deleted. (Committed, env repo.)
+- [x] **Stale comment** — `BrowserPageWPE.cpp:2270` `mouseEvent` "once setScrollPosition is wired". **FIXED
+  (b):** reworded — `contentX/Y` go straight to `dispatchPointer` (correct only unscrolled/unzoomed); scroll
+  tracking IS wired now; the content→view map remains a real TODO for scrolled/zoomed taps. (Committed, backend.)
+- [x] **`deploy-252.sh` tail** — writes a `run.sh` that execs `frame-dump`, not `BrowserServer-atlas`.
+  **FIXED (a):** header relabeled as the standalone frame-dump repro-harness deployer. (Committed, env repo.)
+- [x] **`upstart-atlas`** ran `./BrowserServer -platform qbs`. **Investigated + FIXED (a+b):** boot chain =
+  upstart → `deviceroot/atlas/BrowserServer` (the `wrapper-BrowserServer` script) → `exec .../wpe-252/
+  BrowserServer-atlas -platform Minimal`, so the `qbs` arg was ignored. (b) dropped `-platform qbs` from
+  `upstart-atlas`; (a) re-synced the device wrapper's drifted log target (`>>bs-crash.log` append →
+  `>bs-atlas.log` truncate; only line 41 differed). Both deployed to device (/ remounted rw then re-sealed ro).
+  (Committed, env repo.)
 
 ---
 
