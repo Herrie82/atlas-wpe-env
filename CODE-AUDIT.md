@@ -29,32 +29,26 @@ mediad-handle block is never compiled / dead, targeting an unwritten `mediadBegi
 
 ---
 
-## GROUP A — Safe deletions (verified dead, RISK: none)
+## GROUP A — Safe deletions — partly DONE 2026-07-07 (A1 all; A2-4 done; A2-5 KEEP; A2-6 deferred; A2-7 skipped)
 
-Do these first; each is provably unused.
-
-### A1 · atlas-wpe-backend
-- [ ] **Delete `atlas-wpe-glue.cpp`** (entire 117-line file). Stale "SKETCH"; declares a parallel mini
-  `BrowserPageWPE` with obsolete signatures and calls the **old 4-arg** `wpe_atlas_view_backend_create`
-  (header now requires the **6-arg** form, `wpe-atlas-backend.h:47`) → would not compile. Superseded by the
-  real `BrowserPageWPE.cpp`. Not in the build path.
-- [ ] **Remove member `m_fsFillH`** (`BrowserPageWPE.h:296`) — zero references anywhere. Vestige of the
-  removed Tier-1 fullscreen CSS path.
-- [ ] **Remove `m_bufferLock` (sem_t\*) + `m_bufferLockName`** (`BrowserPageWPE.h:290-291`). Copied from the
-  QtWebKit `BrowserPage`; `m_bufferLock` is only init to 0 (ctor `.cpp:132`), never read/written/freed;
-  `m_bufferLockName` only init to 0 + `free(0)` in dtor (`.cpp:166`). Delete both + their ctor/dtor lines.
+### A1 · atlas-wpe-backend — ✅ ALL DONE (commit `7298dee`, compile-checked)
+- [x] **Deleted `atlas-wpe-glue.cpp`** — stale sketch, old 4-arg `wpe_atlas_view_backend_create`, not built.
+- [x] **Removed `m_fsFillH`** (`BrowserPageWPE.h`) — Tier-1 vestige, zero refs.
+- [x] **Removed `m_bufferLock` + `m_bufferLockName`** (decls + ctor-init + dtor `free(0)`) + the now-unused
+  `#include <semaphore.h>`. (Build re-injects semaphore.h into the merged header, so no build impact.)
 
 ### A2 · atlas-browser-app (enyo)
-- [ ] **Delete tracked backup files** (9): `source/Browser.js.orig`, `source/BrowserApp.js.orig`,
-  `source/BrowserApp.js.prehttps`, `source/BrowserApp.js.preprivate`, `source/BrowserContextMenu.js.orig`,
-  `source/URLSearch.js.orig`, `source/URLSearch.js.prehttps`, `css/browser.css.orig`, `depends.js.orig`.
-- [ ] **Delete unused/duplicate icons**: `icon-64x64.png` (byte-identical to `icon.png`, which `appinfo.json`
-  uses); `icon-48x48.png` + `icon-1024x1024.png` (present but not referenced by appinfo.json);
-  `icon-1024x1024.psd` (~5 MB) + `icon-256x256.psd` (~360 KB) source art (move to an art folder outside the
-  app, or drop).
-- [ ] **Remove dead functions** (defined once, nothing wired to them): `Browser.js:765 doneSelectionClick`,
-  `Browser.js:998 deleteImages`, `ReaderView.js:86 _readerSpinner`, `URLSearch.js:259 highlightResultText`.
-- [ ] Fix malformed `.gitignore` merged entry `.DS_Storeearth_icons_final(8)/` (missing newline).
+- [x] **Deleted the 9 tracked backup files** (commit `c88fc29`): `*.orig` ×6, `*.prehttps` ×2, `*.preprivate`.
+- [x] **Icons — KEPT (decision: keep all).** NOTE/correction: `appinfo.json` references **two** — `icon.png`
+  (icon) **and** `icon-256x256.png` (splashicon) → both load-bearing. `icon-64x64.png` is a byte-identical dup
+  of `icon.png`; `icon-48x48.png`, `icon-1024x1024.png`, `icon-1024x1024.psd`, `icon-256x256.psd` are
+  unreferenced (~6.1 MB) but **left in place per decision**. (Removable later if desired.)
+- [~] **Dead functions — MARKED, NOT DELETED (revisit later).** `Browser.js doneSelectionClick`,
+  `Browser.js deleteImages`, `ReaderView.js _readerSpinner`, `URLSearch.js highlightResultText` each annotated
+  `// UNUSED/TODO(audit A2-6): … revisit in detail before deleting.` (commit `c88fc29`). No caller/handler
+  wiring found, but kept pending a detailed review.
+- [ ] **`.gitignore` — NOT actioned** (not requested). Two malformed lines remain: `resources/` has a trailing
+  CR, and `.DS_Storeearth_icons_final(8)/` merges two entries (missing newline). Fix if/when desired.
 
 ---
 
