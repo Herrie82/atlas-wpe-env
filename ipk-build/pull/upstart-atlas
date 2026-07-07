@@ -7,7 +7,9 @@ script
     export BROWSERSERVER_NAME=atlas
     cd /media/cryptofs/apps/usr/palm/applications/org.webosports.app.atlas/deviceroot/atlas
     rm -f /tmp/yapserver.atlas*
-    exec ./BrowserServer -platform qbs
+    # ./BrowserServer is the wrapper script (wrapper-BrowserServer); it forces -platform Minimal on the
+    # real BrowserServer-atlas exec, so no platform arg is needed here.
+    exec ./BrowserServer
 end script
 
 respawn
