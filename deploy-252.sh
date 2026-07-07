@@ -1,5 +1,8 @@
 #!/bin/bash
-# Assemble the on-device deploy bundle for the glibc WPE WebKit stack.
+# Assemble the standalone FRAME-DUMP TEST-HARNESS bundle for the glibc WPE WebKit stack.
+# NOTE: this deploys the `frame-dump` repro harness (its run.sh execs frame-dump), NOT the shipping
+# BrowserServer-atlas. The device runtime is BrowserServer-atlas via wrapper-BrowserServer + ipk-postinst.sh
+# (see build-browserserver.sh / link-bs-252.sh / redeploy-test.sh). Use this only for isolated WPE repro.
 # - Ships the glibc-2.23 runtime (device's old glibc lacks 2.23 symbols; 2.23 is forward-compat so the
 #   device Adreno libEGL loads against it — proven by the standalone glibc EGL probe).
 # - SYMLINK-FREE (/media/internal is FAT): every real .so copied under its SONAME.
