@@ -1,0 +1,292 @@
+# WPE WebKit 2.52.4 — Atlas fullscreen crash fixes (2026-07-07)
+# Apply from the wpewebkit-2.52.4 source root: patch -p1 < this-file
+# 3 real fixes (nextTarget empty-guard, initializeTarget fd-duplicate, WebFullScreenManagerProxy
+# m_client CheckedPtr->WeakPtr) + ATLAS-FS debug instrumentation (strip before shipping).
+#
+--- a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/AcceleratedSurface.cpp	2026-05-11 14:54:39.647206300 +0200
++++ b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/AcceleratedSurface.cpp	2026-07-06 22:18:06.654109087 +0200
+@@ -132,9 +132,13 @@
+     if (m_swapChain.type() == SwapChain::Type::WPEBackend)
+         m_swapChain.initialize(webPage);
+ #endif
++    fprintf(stderr, "ATLAS-FS AccelSurface ctor  this=%p id=%llu [%s]\n", (void*)this, (unsigned long long)m_id, RunLoop::isMain()?"MAIN":"comp"); fflush(stderr);
+ }
+ 
+-AcceleratedSurface::~AcceleratedSurface() = default;
++AcceleratedSurface::~AcceleratedSurface()
++{
++    fprintf(stderr, "ATLAS-FS AccelSurface DTOR  this=%p id=%llu [%s]\n", (void*)this, (unsigned long long)m_id, RunLoop::isMain()?"MAIN":"comp"); fflush(stderr);
++}
+ 
+ WTF_MAKE_TZONE_ALLOCATED_IMPL(AcceleratedSurface::RenderTarget);
+ 
+@@ -611,10 +615,12 @@
+     wpe_renderer_backend_egl_target_set_client(m_backend, &s_client, const_cast<AcceleratedSurface*>(&surface));
+     wpe_renderer_backend_egl_target_initialize(m_backend, downcast<PlatformDisplayLibWPE>(PlatformDisplay::sharedDisplay()).backend(),
+         std::max(1, initialSize.width()), std::max(1, initialSize.height()));
++    fprintf(stderr, "ATLAS-FS RTWPE ctor  this=%p backend=%p surface=%p [%s]\n", (void*)this, (void*)m_backend, (const void*)&surface, RunLoop::isMain()?"MAIN":"comp"); fflush(stderr);
+ }
+ 
+ AcceleratedSurface::RenderTargetWPEBackend::~RenderTargetWPEBackend()
+ {
++    fprintf(stderr, "ATLAS-FS RTWPE DTOR  this=%p backend=%p [%s]\n", (void*)this, (void*)m_backend, RunLoop::isMain()?"MAIN":"comp"); fflush(stderr);
+ #if WPE_CHECK_VERSION(1, 9, 1)
+     // libwpe 1.9.1 introduced an additional ::deinitialize function, which
+     // may be called some time before destruction. As there is no better place
+@@ -814,8 +820,18 @@
+ AcceleratedSurface::RenderTarget* AcceleratedSurface::SwapChain::nextTarget()
+ {
+ #if USE(WPE_RENDERER)
+-    if (m_type == Type::WPEBackend)
++    if (m_type == Type::WPEBackend) {
++        // ATLAS FIX (root of the fullscreen SIGBUS): m_lockedTargets[0] on an EMPTY vector is UB and returns
++        // a garbage/freed RenderTarget* -> willRenderFrame() derefs it -> SIGBUS in
++        // wpe_renderer_backend_egl_target_frame_will_render. This happens when the compositor renders a frame
++        // after SwapChain::reset() cleared the targets (fullscreen teardown/recreate) but before a new target
++        // is installed. Return null so AcceleratedSurface::willRenderFrame skips the frame instead of crashing.
++        if (m_lockedTargets.isEmpty()) {
++            fprintf(stderr, "ATLAS-FS nextTarget: m_lockedTargets EMPTY -> null (skip frame, avoids UAF SIGBUS) [%s]\n", RunLoop::isMain()?"MAIN":"comp"); fflush(stderr);
++            return nullptr;
++        }
+         return m_lockedTargets[0].get();
++    }
+ #endif
+ 
+ #if (PLATFORM(GTK) || ENABLE(WPE_PLATFORM)) && (USE(GBM) || OS(ANDROID))
+@@ -878,6 +894,9 @@
+ 
+ void AcceleratedSurface::SwapChain::reset()
+ {
++    fprintf(stderr, "ATLAS-FS SwapChain::reset locked=%zu free=%zu [%s]\n", m_lockedTargets.size(), m_freeTargets.size(), RunLoop::isMain()?"MAIN":"comp");
++    for (auto& t : m_lockedTargets) fprintf(stderr, "ATLAS-FS   reset destroying locked target=%p\n", (void*)t.get());
++    fflush(stderr);
+ #if ENABLE(WPE_PLATFORM)
+     WebProcess::singleton().parentProcessConnection()->send(Messages::AcceleratedBackingStore::DidChangeBufferConfiguration(0), m_surfaceID);
+ #endif
+@@ -907,12 +926,19 @@
+     m_hostFD = webPage.hostFileDescriptor();
+     m_initialSize = webPage.size();
+     m_initialSize.scale(webPage.deviceScaleFactor());
++    fprintf(stderr, "ATLAS-FS SwapChain::initialize surfaceID=%llu hostFD=%d [%s]\n", (unsigned long long)m_surfaceID, m_hostFD.value(), RunLoop::isMain()?"MAIN":"comp"); fflush(stderr);
+ }
+ 
+ uint64_t AcceleratedSurface::SwapChain::initializeTarget(const AcceleratedSurface& surface)
+ {
+     ASSERT(m_type == Type::WPEBackend);
+-    auto target = RenderTargetWPEBackend::create(m_surfaceID, m_initialSize, WTF::move(m_hostFD), surface);
++    fprintf(stderr, "ATLAS-FS SwapChain::initializeTarget surfaceID=%llu hostFD=%d locked=%zu [%s]\n", (unsigned long long)m_surfaceID, m_hostFD.value(), m_lockedTargets.size(), RunLoop::isMain()?"MAIN":"comp"); fflush(stderr);
++    // ATLAS FIX: DUPLICATE the host fd instead of WTF::move()ing it away. Moving consumed m_hostFD, so any
++    // SECOND initializeTarget on the same SwapChain (which fullscreen's teardown+recreate can trigger) passed
++    // an already-released fd=-1 to wpe_renderer_backend_egl_target_create -> a garbage backend pointer that
++    // then crashed (SIGBUS) in willRenderFrame on the compositor thread. Duplicating keeps m_hostFD valid so
++    // every target creation gets a live fd; the target owns+closes its own dup, m_hostFD closes on ~SwapChain.
++    auto target = RenderTargetWPEBackend::create(m_surfaceID, m_initialSize, m_hostFD.duplicate(), surface);
+     auto window = static_cast<RenderTargetWPEBackend*>(target.get())->window();
+     m_lockedTargets.append(WTF::move(target));
+     return window;
+@@ -1039,6 +1065,7 @@
+     bool sizeDidChange = m_swapChain.resize(size);
+ 
+     m_target = m_swapChain.nextTarget();
++    { static int n = 0; if (n++ % 30 == 0 || !m_target) fprintf(stderr, "ATLAS-FS willRenderFrame surface=%p target=%p [%s]\n", (void*)this, (void*)m_target, RunLoop::isMain()?"MAIN":"comp"); fflush(stderr); }
+     if (m_target)
+         m_target->willRenderFrame();
+ 
+--- a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/ThreadedCompositor.cpp	2026-04-01 23:32:25.483707400 +0200
++++ b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/ThreadedCompositor.cpp	2026-07-06 19:56:06.321379703 +0200
+@@ -116,6 +116,7 @@
+ void ThreadedCompositor::invalidate()
+ {
+     ASSERT(RunLoop::isMain());
++    fprintf(stderr, "ATLAS-FS TC::invalidate ENTER comp=%p surface=%p [%s]\n", (void*)this, (void*)m_surface.get(), RunLoop::isMain()?"MAIN":"comp"); fflush(stderr);
+ 
+     {
+         Locker locker { m_state.lock };
+@@ -126,8 +127,11 @@
+ 
+     m_didCompositeRunLoopObserver->invalidate();
+     m_workQueue->dispatchSync([this] {
+-        if (!m_context || !m_context->makeContextCurrent())
++        fprintf(stderr, "ATLAS-FS TC::invalidate dispatchSync-lambda comp=%p context=%p [%s]\n", (void*)this, (void*)m_context.get(), RunLoop::isMain()?"MAIN":"comp"); fflush(stderr);
++        if (!m_context || !m_context->makeContextCurrent()) {
++            fprintf(stderr, "ATLAS-FS TC::invalidate lambda EARLY-RETURN (no context) -> willDestroyGLContext SKIPPED, target NOT destroyed here\n"); fflush(stderr);
+             return;
++        }
+ 
+         // Update the scene at this point ensures the layers state are correctly propagated.
+         flushCompositingState(CompositionReason::RenderingUpdate);
+@@ -137,10 +141,12 @@
+         m_surface->willDestroyGLContext();
+         m_context = nullptr;
+     });
++    fprintf(stderr, "ATLAS-FS TC::invalidate dispatchSync DONE comp=%p -> nulling surface=%p\n", (void*)this, (void*)m_surface.get()); fflush(stderr);
+     m_sceneState = nullptr;
+     m_layerTreeHost = nullptr;
+     m_surface->willDestroyCompositingRunLoop();
+     m_surface = nullptr;
++    fprintf(stderr, "ATLAS-FS TC::invalidate EXIT comp=%p (surface nulled)\n", (void*)this); fflush(stderr);
+ }
+ 
+ void ThreadedCompositor::startRenderTimer()
+--- a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/DrawingAreaCoordinatedGraphics.cpp	2026-02-23 15:40:56.729293600 +0100
++++ b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/DrawingAreaCoordinatedGraphics.cpp	2026-07-06 20:43:44.150814298 +0200
+@@ -240,6 +240,17 @@
+     settings.setAcceleratedCompositingForFixedPositionEnabled(settings.acceleratedCompositingEnabled());
+ 
+     m_alwaysUseCompositing = settings.acceleratedCompositingEnabled() && settings.forceCompositingMode();
++#if USE(WPE_RENDERER)
++    // ATLAS FIX: the WPE FBO/atlas backend ALWAYS composites (no non-accelerated fallback). Letting the
++    // LayerTreeHost/AcceleratedSurface be torn down + recreated (which fullscreen's root-layer-goes-null
++    // triggers via exitAcceleratedCompositingMode when !m_alwaysUseCompositing) races the compositor thread
++    // and re-creates a WPE target with an already-moved-away host fd (fd=-1) -> garbage backend -> UAF SIGBUS
++    // in willRenderFrame, and cascades to a UIProcess CheckedPtr abort. Force always-composite so the host is
++    // never destroyed while a page is live.
++    if (settings.acceleratedCompositingEnabled())
++        m_alwaysUseCompositing = true;
++#endif
++    fprintf(stderr, "ATLAS-FS updatePreferences alwaysUseCompositing=%d (accel=%d force=%d)\n", m_alwaysUseCompositing, settings.acceleratedCompositingEnabled(), settings.forceCompositingMode()); fflush(stderr);
+ 
+     m_supportsAsyncScrolling = store.getBoolValueForKey(WebPreferencesKey::threadedScrollingEnabledKey());
+ #if ENABLE(DEVELOPER_MODE)
+@@ -329,6 +340,8 @@
+         }
+         m_layerTreeHost->setRootCompositingLayer(graphicsLayer);
+ 
++        if (!graphicsLayer)
++            { fprintf(stderr, "ATLAS-FS setRootCompositingLayer(NULL) alwaysUseCompositing=%d -> %s\n", m_alwaysUseCompositing, m_alwaysUseCompositing ? "KEEP (fix)" : "EXIT (teardown!)"); fflush(stderr); }
+         if (!graphicsLayer && !m_alwaysUseCompositing) {
+             // We'll exit accelerated compositing mode on a timer, to avoid re-entering
+             // compositing code via display() and layout.
+@@ -622,6 +635,7 @@
+ 
+ void DrawingAreaCoordinatedGraphics::exitAcceleratedCompositingMode()
+ {
++    fprintf(stderr, "ATLAS-FS exitAcceleratedCompositingMode alwaysUseCompositing=%d -> %s\n", m_alwaysUseCompositing, m_alwaysUseCompositing ? "no-op (fix holds)" : "DESTROYING LayerTreeHost (crash path)"); fflush(stderr);
+     if (m_alwaysUseCompositing)
+         return;
+ 
+--- a/Source/WebKit/UIProcess/WebFullScreenManagerProxy.h	2026-02-23 15:40:56.564294600 +0100
++++ b/Source/WebKit/UIProcess/WebFullScreenManagerProxy.h	2026-07-06 22:55:25.750082718 +0200
+@@ -40,6 +40,7 @@
+ #include <wtf/Seconds.h>
+ #include <wtf/TZoneMalloc.h>
+ #include <wtf/Vector.h>
++#include <wtf/WeakPtr.h>   // ATLAS: m_client is a WeakPtr (see below)
+ 
+ namespace WebCore {
+ class FloatSize;
+@@ -56,7 +57,11 @@
+ class WebProcessProxy;
+ struct SharedPreferencesForWebProcess;
+ 
+-class WebFullScreenManagerProxyClient : public CanMakeCheckedPtr<WebFullScreenManagerProxyClient> {
++class WebFullScreenManagerProxyClient : public CanMakeCheckedPtr<WebFullScreenManagerProxyClient>, public CanMakeWeakPtr<WebFullScreenManagerProxyClient> {
++    // ATLAS: also CanMakeWeakPtr so WebFullScreenManagerProxy::m_client can be a WeakPtr that auto-nulls when
++    // the client (our PageClientImpl) is destroyed first. The prior CheckedPtr crashed
++    // (crashDueToCheckedPtrToDeadObject) in ~WebFullScreenManagerProxy / isFullScreen when the client had
++    // already been torn down during fullscreen (teardown-ordering bug in the headless embedding).
+     WTF_DEPRECATED_MAKE_FAST_ALLOCATED(WebFullScreenManagerProxyClient);
+     WTF_OVERRIDE_DELETE_FOR_CHECKED_PTR(WebFullScreenManagerProxyClient);
+ public:
+@@ -146,7 +151,7 @@
+ #endif
+ 
+     WeakPtr<WebPageProxy> m_page;
+-    CheckedPtr<WebFullScreenManagerProxyClient> m_client;
++    WeakPtr<WebFullScreenManagerProxyClient> m_client;   // ATLAS: WeakPtr (auto-nulls on client destruction) — was CheckedPtr (crashed on dead client)
+     FullscreenState m_fullscreenState { FullscreenState::NotInFullscreen };
+     bool m_blocksReturnToFullscreenFromPictureInPicture { false };
+ #if ENABLE(VIDEO_USES_ELEMENT_FULLSCREEN)
+--- a/Source/WebKit/UIProcess/WebFullScreenManagerProxy.cpp	2026-02-23 15:40:56.564294600 +0100
++++ b/Source/WebKit/UIProcess/WebFullScreenManagerProxy.cpp	2026-07-06 22:57:03.247856712 +0200
+@@ -167,24 +167,25 @@
+ 
+ void WebFullScreenManagerProxy::close()
+ {
+-    if (CheckedPtr client = m_client)
++    if (auto* client = m_client.get())
+         client->closeFullScreenManager();
+ }
+ 
+ void WebFullScreenManagerProxy::detachFromClient()
+ {
++    fprintf(stderr, "ATLAS-FS ~detachFromClient m_client.alive=%d (WeakPtr; was CheckedPtr that crashed on dead client)\n", m_client.get() != nullptr); fflush(stderr);
+     close();
+     m_client = nullptr;
+ }
+ 
+ void WebFullScreenManagerProxy::attachToNewClient(WebFullScreenManagerProxyClient& client)
+ {
+-    m_client = &client;
++    m_client = client;
+ }
+ 
+ bool WebFullScreenManagerProxy::isFullScreen()
+ {
+-    CheckedPtr client = m_client;
++    auto* client = m_client.get();
+     return client && client->isFullScreen();
+ }
+ 
+@@ -211,7 +212,7 @@
+ #endif // ENABLE(QUICKLOOK_FULLSCREEN)
+ #endif // PLATFORM(IOS_FAMILY)
+ 
+-    CheckedPtr client = m_client;
++    auto* client = m_client.get();
+     if (!client)
+         co_return false;
+ 
+@@ -270,7 +271,7 @@
+     }
+     m_imageMIMEType = mediaDetails.mimeType;
+ 
+-    if (CheckedPtr client = m_client)
++    if (auto* client = m_client.get())
+         client->updateImageSource();
+ }
+ #endif // ENABLE(QUICKLOOK_FULLSCREEN)
+@@ -280,7 +281,7 @@
+ #if ENABLE(QUICKLOOK_FULLSCREEN)
+     m_imageBuffer = nullptr;
+ #endif
+-    CheckedPtr client = m_client;
++    auto* client = m_client.get();
+     if (!client)
+         co_return;
+ 
+@@ -323,7 +324,7 @@
+ 
+     co_await page->nextPresentationUpdate();
+ 
+-    CheckedPtr client = m_client;
++    auto* client = m_client.get();
+     if (!client)
+         co_return false;
+ 
+@@ -340,7 +341,7 @@
+ 
+ Awaitable<void> WebFullScreenManagerProxy::beganExitFullScreen(FrameIdentifier frameID, IntRect initialFrame, IntRect finalFrame)
+ {
+-    CheckedPtr client = m_client;
++    auto* client = m_client.get();
+     if (!client)
+         co_return;
+ 
+@@ -391,14 +392,14 @@
+ 
+ bool WebFullScreenManagerProxy::lockFullscreenOrientation(WebCore::ScreenOrientationType orientation)
+ {
+-    if (CheckedPtr client = m_client)
++    if (auto* client = m_client.get())
+         return client->lockFullscreenOrientation(orientation);
+     return false;
+ }
+ 
+ void WebFullScreenManagerProxy::unlockFullscreenOrientation()
+ {
+-    if (CheckedPtr client = m_client)
++    if (auto* client = m_client.get())
+         client->unlockFullscreenOrientation();
+ }
+ 
