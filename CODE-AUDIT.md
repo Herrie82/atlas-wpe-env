@@ -52,32 +52,31 @@ mediad-handle block is never compiled / dead, targeting an unwritten `mediadBegi
 
 ---
 
-## GROUP B — Retire superseded / decide (RISK: low–medium, needs a call)
+## GROUP B — Retire superseded / decide — decided 2026-07-07 (B3a done; B1/B2/B3b KEPT)
 
-### B1 · Tier-2 fullscreen (superseded by mediad handoff) — atlas-wpe-backend
-The pre-mediad fullscreen attempts. Reachability is **triple-gated** and self-documented as non-working:
-`enter-fullscreen` only fires if `/tmp/atlas_fs` (default OFF, `.cpp:578`); then if `/tmp/atlas_mediad` set →
-new path, else → `enterFsResize()`, which **immediately returns** unless `/tmp/atlas_fsresize` exists
-(`.cpp:1263`) and its own header (`.cpp:1255-1262`) says it produces "frozen fullscreen" (frames dropped).
-- [ ] Delete `enterFsResize()` / `exitFsResize()` (`.cpp:1253-1292`) + declarations.
-- [ ] Delete members `m_fsActive`, `m_fsRestoreH`, `m_fsRestoreScrollY` (Tier-2 only). **Keep `m_fsPending`**
-  — it is reused by the live mediad enter path (`.cpp:621-647`).
-- [ ] Remove stale Tier-1/Tier-2 explanatory comments (`.cpp:607-613`).
-- **DECISION**: delete now, or keep one more cycle as a (broken) fallback until mediad display + reliability
-  are fully signed off? Recommendation: delete — it is not a working fallback.
+### B1 · Tier-2 fullscreen (superseded by mediad handoff) — atlas-wpe-backend — ⏸ KEEP FOR NOW
+DECISION: **keep** until the mediad handoff display + reliability are fully signed off. Not deleted.
+Still present (triple-gated, self-described "frozen fullscreen", effectively a no-op fallback):
+- `enterFsResize()` / `exitFsResize()` (`.cpp:1250-1291`) + decls (`.h:67-68`); the enter-fullscreen else-branch
+  (`.cpp:628-641`) and leave-fullscreen else (`.cpp:647`).
+- members `m_fsActive`, `m_fsRestoreH`, `m_fsRestoreScrollY` (`.h:294-296`). (`m_fsPending` is live — mediad uses it.)
+- stale Tier-1/Tier-2 comments (`.cpp:607-611, 628-631`).
+→ Revisit for deletion once mediad is confirmed the sole fullscreen path.
 
-### B2 · enyo commented-out blocks (decide keep vs remove)
-- `Preferences.js:57-64` — Autofill RowGroup + "Clear Autofill Information" button, block-commented.
-- `CertificateDetail.js:171,178` commented `setValue`; `:210,217` commented `this.warn`.
-- `BrowserApp.js:210-211` `//showAppMenu()/resize()`; `:281` `//browser.hasKind()`.
-- `Browser.js:191,198,911` commented findBar/findInPage/setZoom; `ActionBar.js:82,90` commented bookmarks.
+### B2 · enyo commented-out blocks — ⏸ KEEP (feature markers)
+DECISION: **keep** — they mark disabled/not-yet-wired features. Not deleted.
+- `Preferences.js:57-64` Autofill RowGroup; `CertificateDetail.js:171,178,210,217` setValue/warn;
+  `BrowserApp.js:210-211,281` showAppMenu/resize/hasKind; `Browser.js:191,198,912` findBar/findInPage/setZoom;
+  `ActionBar.js:82,90` bookmarks.
 
-### B3 · BrowserAdapter (mostly clean)
-- `BrowserAdapter.cpp:974,978` — `drawDebugBorder`/`drawDebugFill` are now orphaned empty
-  `__attribute__((unused))` stubs (our handlePaint rewrite removed the call sites). Remove or keep as stubs.
-- `BrowserAdapter.cpp:3341-3389` — `js_dragStart`/`js_dragProcess`/`js_dragEnd` duplicate the drag pathway
-  that `js_setDragMode` + pen-gesture handlers already funnel into `asyncCmdDragStart/Process/End`. **Confirm
-  the app still needs both exposed APIs** before removing.
+### B3 · BrowserAdapter
+- [x] **B3a DONE** — removed the dead `DRAW_DEBUG_COLORS` block: `drawDebugBorder`/`drawDebugFill` (both the
+  `#if` impls and the `#else __attribute__((unused))` stubs, no call sites) **plus** the 4 orphaned debug
+  `QColor` statics (`colorNoOffscreen`/`colorNoConnection`/`colorOffscreenSurfEmpty`/`colorGenericBorder`,
+  declared-only). Commit in BrowserAdapter repo; 0 leftover refs.
+- [keep] **B3b KEPT** — `js_dragStart`/`js_dragProcess`/`js_dragEnd` (`.cpp:3341-3389` + table rows `.cpp:397-399`).
+  The enyo app currently uses only `setDragMode`, but these are **intentionally kept** — pending open scroll/drag
+  issues where they may be needed. (Verified: `js_setDragMode` is live and stays regardless.)
 
 ---
 
