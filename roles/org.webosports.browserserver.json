@@ -1,0 +1,14 @@
+{
+    "role": {
+        "exeName": "/media/cryptofs/apps/usr/palm/applications/org.webosports.app.atlas/deviceroot/wpe-252/BrowserServer-atlas",
+        "type": "privileged",
+        "allowedNames": ["org.webosports.browserserver", ""]
+    },
+    "permissions": [
+        {
+            "service": "org.webosports.browserserver",
+            "inbound": ["*"],
+            "outbound": ["*"]
+        }
+    ]
+}

@@ -31,7 +31,7 @@ BANNER=('/* !!! GENERATED FILE - DO NOT EDIT !!!\n'
 orig=open(f'{BS}/Src/BrowserPage.h').read(); wpe=open(f'{WPE}/backend-atlas/BrowserPageWPE.h').read()
 o0,o1=block(orig,'BrowserPage'); w0,w1=block(wpe,'BrowserPageWPE')
 wc=wpe[w0:w1].replace('BrowserPageWPE','BrowserPage')
-open(f'{SRC}/BrowserPage.h','w').write(BANNER+orig[:o0]+'#include <wpe/webkit.h>\n#include <semaphore.h>\n\n'+wc+orig[o1:])
+open(f'{SRC}/BrowserPage.h','w').write(BANNER+orig[:o0]+'#include <wpe/webkit.h>\n#include <semaphore.h>\n#include <lunaservice.h>\n\n'+wc+orig[o1:])
 open(f'{SRC}/BrowserPage.cpp','w').write(BANNER+open(f'{WPE}/backend-atlas/BrowserPageWPE.cpp').read().replace('BrowserPageWPE','BrowserPage'))
 PYMERGE
 SI=$DS/build-deps/staging/include
@@ -39,7 +39,7 @@ CF=$(pkg-config --cflags wpe-webkit-2.0 wpe-1.0 glib-2.0 2>/dev/null)
 INC="-I$WPE/browserserver-wpe -I$SRC -I$BS/Yap -I$WPE/backend-atlas \
  -I$SI -I$SI/webkit -I$SI/QtCore -I$SI/QtGui -I$SI/QtNetwork -I$SI/QtWebKit -I$SI/WebKitSupplemental \
  -I$DS/build-deps/WebKitSupplemental/misc"
-DEF="-DQT_NO_KEYWORDS -DNDEBUG -D_GLIBCXX_USE_CXX11_ABI=0 -Demit="
+DEF="-DQT_NO_KEYWORDS -DNDEBUG -D_GLIBCXX_USE_CXX11_ABI=0 -Demit= -DUSE_LUNA_SERVICE -DATLAS_LUNA"
 CXXF="-std=c++11 -fPIC -fpermissive -Wno-deprecated $DEF $INC $CF"
 
 # QtWebKit-only units to EXCLUDE (replaced by WPE or not needed for first paint), + the moc files (regen later)
