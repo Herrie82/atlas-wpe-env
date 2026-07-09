@@ -1,0 +1,57 @@
+# WPE WebKit 2.52.4 - Atlas WebGL / ANGLE fixes (2026-07-09)
+# Apply from the wpewebkit-2.52.4 source root: patch -p1 < this-file
+#
+# FIX: ANGLE's GL backend crashes the WebProcess (SIGSEGV, jump to 0x0) the moment a
+# page creates a WebGL context, on the HP TouchPad's Adreno 220 (APQ8060, Dec-2011
+# Qualcomm driver). Core-dump backtrace: rx::FunctionsGL::initialize() loads the
+# glGetString pointer as NULL and immediately calls glGetString(GL_VERSION) -> jump to 0.
+#
+# ROOT CAUSE: rx::FunctionsEGLDL::getProcAddress() resolves GL entry points via
+#   (1) eglGetProcAddress(name)      -> this old Adreno driver returns NULL for CORE
+#                                       (non-extension) GL functions like glGetString
+#   (2) dlsym(nativeEGLHandle, name) -> nativeEGLHandle is libEGL.so, but the core GL
+#                                       symbols live in libGLESv2.so, so this is NULL too
+# Both fail -> NULL function pointer -> crash. (Extension entry points resolve fine, which
+# is why the failure is specifically core-function init.)
+#
+# FIX (additive, cannot regress a driver where eglGetProcAddress already works): after the
+# two existing lookups return NULL, dlopen("libGLESv2.so") once (leaked on purpose, exactly
+# like nativeEGLHandle) and dlsym core functions from it; final fallback is the global
+# namespace (RTLD_DEFAULT). With this, WebGL context creation succeeds on the Adreno 220
+# (verified on-device: "WEBGL OK err=0 VERSION=WebGL 1.0", shaders compile, drawArrays runs,
+# no crash). NOTE: canvas-layer compositing into the Atlas readback surface is a SEPARATE
+# open issue (the canvas renders into ANGLE's FBO but does not yet appear in the page blit).
+#
+--- a/Source/ThirdParty/ANGLE/src/libANGLE/renderer/gl/egl/FunctionsEGLDL.cpp	2026-07-09 11:36:53.304001689 +0200
++++ b/Source/ThirdParty/ANGLE/src/libANGLE/renderer/gl/egl/FunctionsEGLDL.cpp	2026-07-09 11:28:57.572407013 +0200
+@@ -69,7 +69,29 @@
+     {
+         return f;
+     }
+-    return dlsym(nativeEGLHandle, name);
++    f = dlsym(nativeEGLHandle, name);
++    if (f)
++    {
++        return f;
++    }
++    // Atlas / Adreno 2xx (APQ8060) fix: the old Qualcomm driver's eglGetProcAddress
++    // returns NULL for CORE (non-extension) GL entry points such as glGetString,
++    // glGetIntegerv, etc. Those symbols do not live in libEGL.so (== nativeEGLHandle)
++    // either -- they are in libGLESv2.so. Without this, FunctionsGL::initialize()
++    // loads glGetString == NULL and immediately calls it (glGetString(GL_VERSION)),
++    // crashing the WebProcess with SIGSEGV (jump to 0x0). dlopen the GLES client
++    // library once (leaked on purpose, like nativeEGLHandle above) and resolve core
++    // functions from it, then fall back to the global namespace.
++    static void *glesHandle = dlopen("libGLESv2.so", RTLD_NOW | RTLD_GLOBAL);
++    if (glesHandle)
++    {
++        f = dlsym(glesHandle, name);
++        if (f)
++        {
++            return f;
++        }
++    }
++    return dlsym(RTLD_DEFAULT, name);
+ }
+ 
+ }  // namespace rx
