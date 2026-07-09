@@ -38,4 +38,9 @@ export ATLAS_MDP_NOSWAP=1                  # decoder emits CbCr NV12 already -> 
 # would be looked up under /media/internal (which we no longer populate).
 export WEBKIT_EXEC_PATH=$D/libexec/wpe-webkit-2.0
 export WEBKIT_INJECTED_BUNDLE_PATH=$D/lib/wpe-webkit-2.0/injected-bundle
-exec $D/BrowserServer-atlas -platform Minimal >/tmp/bs-atlas.log 2>&1
+# Deadlock watchdog: the default 15000ms aborts BS when the main thread stalls in a
+# memory-pressure GC / swap-in under heavy accumulated state (idle "random crash" — confirmed
+# via core: YapServerDeadlockPriv::deadlockThreadTimerCallback -> abort). A slow GC recovers in
+# well under 45s, so raise the timeout so BS survives the stall instead of crash+respawn; a genuine
+# deadlock is still caught, just later. Tune via -d / DeadlockTimeoutMs setting (-1 = disabled).
+exec $D/BrowserServer-atlas -platform Minimal -d 45000 >/tmp/bs-atlas.log 2>&1
