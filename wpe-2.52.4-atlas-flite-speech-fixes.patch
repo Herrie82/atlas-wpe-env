@@ -1,0 +1,84 @@
+# WPE WebKit 2.52.4 - Atlas Flite speech-synthesis playback fix (2026-07-10)
+# Apply from the wpewebkit-2.52.4 source root: patch -p1 < this-file
+#
+# Symptom: speechSynthesis.speak() produced only a couple of clicks/"plops" instead of speech
+# on the TouchPad (WM8994 / ALSA @44100, ring buffer ~54ms). Flite PCM itself is perfect
+# (verified: rendering the utterance to a WAV and playing it through the same pulse path is
+# clean, continuous speech).
+#
+# Root cause: WebKitFliteSrc was a LIVE source with do-timestamp=TRUE. It renders the whole
+# utterance up front and serves it in back-to-back 1024-sample buffers in microseconds; with
+# do-timestamp every buffer is stamped with the wall-clock at push time, so all ~N buffers
+# cluster at nearly the same timestamp. An audio sink with a small ring buffer then drops all
+# but the first few as "too late" -> plops. (The soundtouch 'pitch' element had been masking
+# this by buffering internally; it is broken on our softfp build and is disabled on-device.)
+#
+# Fix: behave as a normal NON-live source with explicit monotonic per-buffer PTS/duration
+# (bytes/bpf -> frames -> running time), so the audio sink schedules the full utterance across
+# real time - the same model as the working media/playbin path. In-browser result: the sink
+# now receives the whole utterance (e.g. 160 buffers spanning ~3.7s) instead of ~18 (~0.43s),
+# and speech is fully audible.
+#
+--- a/Source/WebCore/platform/gstreamer/WebKitFliteSourceGStreamer.cpp
++++ b/Source/WebCore/platform/gstreamer/WebKitFliteSourceGStreamer.cpp
+@@ -59,6 +59,7 @@
+     struct StreamingMembers {
+         bool didLoadUtterance;
+         GRefPtr<GstAdapter> adapter;
++        guint64 samplesSent;
+     };
+     DataMutex<StreamingMembers> dataMutex;
+ 
+@@ -104,6 +105,7 @@
+     DataMutexLocker members { priv->dataMutex };
+     gst_adapter_clear(members->adapter.get());
+     members->didLoadUtterance = false;
++    members->samplesSent = 0;
+ }
+ 
+ static void webkitFliteSrcConstructed(GObject* object)
+@@ -118,11 +120,21 @@
+     gst_base_src_set_format(baseSrc, GST_FORMAT_TIME);
+     gst_base_src_set_blocksize(baseSrc, -1);
+     gst_base_src_set_automatic_eos(baseSrc, FALSE);
+-    gst_base_src_set_do_timestamp(baseSrc, TRUE);
+-    gst_base_src_set_live(baseSrc, TRUE);
++    // We render the whole utterance up front and then stream it out with explicit
++    // per-buffer timestamps (see webkitFliteSrcCreate). Upstream configured this as a
++    // live source with do-timestamp=TRUE, which stamps every buffer with the wall-clock
++    // at push time; because the entire utterance is served back-to-back in microseconds
++    // the buffers all cluster at the same timestamp, and an audio sink with a small ring
++    // buffer (e.g. ~54ms on the TouchPad WM8994/ALSA path) drops all but the first few
++    // as "too late" -- audible as a couple of clicks/"plops" instead of speech. Behaving
++    // as a normal non-live source with monotonic timestamps lets the sink schedule the
++    // full utterance across real time (same model as the working media/playbin path).
++    gst_base_src_set_do_timestamp(baseSrc, FALSE);
++    gst_base_src_set_live(baseSrc, FALSE);
+ 
+     DataMutexLocker members { priv->dataMutex };
+     members->adapter = adoptGRef(gst_adapter_new());
++    members->samplesSent = 0;
+ 
+     // Some website does not call initializeVoiceList(), so we ensure flite voices initialized here.
+     ensureFliteVoicesInitialized();
+@@ -180,7 +192,19 @@
+     if (members->didLoadUtterance && !queueSize)
+         return GST_FLOW_EOS;
+ 
+-    *buffer = gst_adapter_take_buffer(members->adapter.get(), std::min(queueSize, bytes));
++    GstBuffer* buf = gst_adapter_take_buffer(members->adapter.get(), std::min(queueSize, bytes));
++
++    // Assign monotonic timestamps derived from the number of samples already sent so
++    // the audio sink can pace playback correctly (see the note in webkitFliteSrcConstructed
++    // about clustered timestamps). info.bpf is bytes-per-frame (channels * sample width).
++    if (priv->info.bpf > 0 && priv->info.rate > 0) {
++        guint64 frames = gst_buffer_get_size(buf) / priv->info.bpf;
++        GST_BUFFER_PTS(buf) = gst_util_uint64_scale(members->samplesSent, GST_SECOND, priv->info.rate);
++        GST_BUFFER_DURATION(buf) = gst_util_uint64_scale(frames, GST_SECOND, priv->info.rate);
++        members->samplesSent += frames;
++    }
++
++    *buffer = buf;
+     return GST_FLOW_OK;
+ }
+ 
