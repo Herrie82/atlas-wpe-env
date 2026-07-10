@@ -39,6 +39,10 @@ WORK=$(mktemp -d); cp "$GB"/ext/alsa/*.c "$GB"/ext/alsa/*.h "$WORK"/
 # drop the alsamidisrc registration (source dropped from the compile list below)
 sed -i 's#ret |= GST_ELEMENT_REGISTER (alsamidisrc, plugin);#/* alsamidisrc removed: device libasound built --disable-seq (no snd_seq_*) */#' \
   "$WORK/gstalsaplugin.c"
+# Atlas device-selection fix: the stock provider exposes ALL 4 wm8994 PCMs per direction, so WebKit
+# picked the busy MVS telephony node (hw:0,3) as the default mic. Overlay the patched provider that
+# exposes ONLY the real Media Capture (hw:0,1 mic) + Media Playback (hw:0,0 speaker), marked default.
+cp -f "$(dirname "$0")/gstalsadeviceprovider.c.atlas" "$WORK/gstalsadeviceprovider.c"
 cd "$WORK"
 CF=$(pkg-config --cflags gstreamer-1.0 gstreamer-base-1.0 gstreamer-audio-1.0 gstreamer-tag-1.0 alsa)
 LF=$(pkg-config --libs   gstreamer-1.0 gstreamer-base-1.0 gstreamer-audio-1.0 gstreamer-tag-1.0 alsa)
