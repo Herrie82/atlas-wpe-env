@@ -8,6 +8,13 @@ mount -o remount,size=131072k /dev 2>/dev/null
 unset LD_PRELOAD
 # Derive our own location so the engine root moves with the app (this wrapper lives at $DR/atlas/BrowserServer).
 ATLAS=$(cd "$(dirname "$0")" && pwd); DR=$(cd "$ATLAS/.." && pwd); D=$DR/wpe-252
+# Camera daemon (getUserMedia bridge, $ATLAS/qcamd). It drives the closed libqcameralib HAL and must
+# run under the SYSTEM glibc/glib -- so start it HERE, with the clean upstart env, BEFORE we export
+# the atlas LD_LIBRARY_PATH below (loading the atlas glib-2.70 into it hangs the HAL). It only opens
+# the camera when a gst client (WebProcess) connects, so it's cheap to leave listening.
+if [ -x "$ATLAS/qcamd" ] && ! ps -ef 2>/dev/null | grep -q '[q]camd'; then
+    "$ATLAS/qcamd" >/tmp/qcamd.log 2>&1 &
+fi
 cp -f $D/lib/libWPEBackend-atlas.so $D/lib/libWPEBackend-default.so 2>/dev/null
 export BPWPE_DEBUG=1
 export LD_LIBRARY_PATH=$D/lib:$ATLAS:/usr/lib/ssl11:/usr/lib:/lib
