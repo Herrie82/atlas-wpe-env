@@ -17,12 +17,14 @@
 #include <gst/video/video.h>
 #include <string.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <sys/stat.h>
 
 #define QCAMD_SHM   "/tmp/qcamd.shm"
 #define QCAMD_SOCK  "/tmp/qcamd.sock"
@@ -31,6 +33,14 @@
 #define MAX_FRAME   (1280*1024*2)
 #define CAM_W 640
 #define CAM_H 480
+/* Output is a CONSTANT OUT_W x OUT_H frame regardless of rotation (videoscale add-borders letterboxes
+ * the rotated content into it) so a live orientation change never renegotiates WebKit's pinned caps. */
+#define OUT_W 480
+#define OUT_H 640
+/* BrowserServer writes the desired videoflip method (0..7) here on device rotation; qcamsrc applies
+ * it live. Absent -> DEFAULT_FLIP (90deg CW, upright in the landscape hold). */
+#define FLIP_FILE    "/tmp/atlas_cam_flip"
+#define DEFAULT_FLIP 1   /* GST_VIDEO_FLIP_METHOD_90R */
 
 struct qcamd_hdr { guint32 magic, width, height, fourcc, frame_size, num_slots, seq, pad; };
 struct frame_msg { guint32 seq, slot; };
@@ -45,9 +55,12 @@ G_DECLARE_FINAL_TYPE(GstQcamSrc, gst_qcam_src, GST, QCAM_SRC, GstPushSrc)
 
 struct _GstQcamSrc {
     GstPushSrc parent;
-    int        sockfd;
-    guint8    *shm;
-    gsize      shm_sz;
+    int         sockfd;
+    guint8     *shm;
+    gsize       shm_sz;
+    GstElement *flip;         /* sibling videoflip in the device bin (cached, looked up lazily) */
+    time_t      flip_mtime;   /* mtime of FLIP_FILE last applied */
+    gint        flip_method;  /* current videoflip method */
 };
 G_DEFINE_TYPE(GstQcamSrc, gst_qcam_src, GST_TYPE_PUSH_SRC)
 
@@ -55,6 +68,25 @@ static GstStaticPadTemplate qcam_src_template = GST_STATIC_PAD_TEMPLATE("src",
     GST_PAD_SRC, GST_PAD_ALWAYS,
     GST_STATIC_CAPS("video/x-raw, format=(string)NV12, "
                     "width=(int)640, height=(int)480, framerate=(fraction)[0/1, 30/1]"));
+
+/* Pin the output to fully-fixed NV12 640x480 @15/1. WebKit's capturer feeds us through decodebin3,
+ * which only passes a RAW stream straight through (firing pad-added) when the incoming caps are
+ * completely fixed. The template's framerate is a range [0/1,30/1]; GstBaseSrc's default fixate would
+ * collapse that to framerate=0/1 (variable), which decodebin3 does NOT treat as clean fixed raw video
+ * -> no pad-added -> videoconvertscale's sink stays unlinked -> qcamsrc pushes into a dead end and the
+ * flow returns NOT_LINKED. Fixating framerate to 15/1 (and re-asserting format/size) makes the caps
+ * event fully fixed so decodebin3 exposes the raw pad and the pipeline links. */
+static GstCaps *gst_qcam_src_fixate(GstBaseSrc *base, GstCaps *caps)
+{
+    GstStructure *s;
+    caps = gst_caps_make_writable(caps);
+    s = gst_caps_get_structure(caps, 0);
+    gst_structure_fixate_field_string(s, "format", "NV12");
+    gst_structure_fixate_field_nearest_int(s, "width", CAM_W);
+    gst_structure_fixate_field_nearest_int(s, "height", CAM_H);
+    gst_structure_fixate_field_nearest_fraction(s, "framerate", 15, 1);
+    return GST_BASE_SRC_CLASS(gst_qcam_src_parent_class)->fixate(base, caps);
+}
 
 static gboolean gst_qcam_src_start(GstBaseSrc *base)
 {
@@ -88,6 +120,7 @@ static gboolean gst_qcam_src_stop(GstBaseSrc *base)
     GstQcamSrc *self = GST_QCAM_SRC(base);
     if (self->sockfd >= 0) { close(self->sockfd); self->sockfd = -1; }   /* disconnect -> daemon stops camera */
     if (self->shm && self->shm != MAP_FAILED) { munmap(self->shm, self->shm_sz); self->shm = NULL; }
+    if (self->flip) { gst_object_unref(self->flip); self->flip = NULL; }
     GST_INFO_OBJECT(self, "disconnected from qcamd; camera stopped");
     return TRUE;
 }
@@ -126,6 +159,34 @@ static gboolean drain_to_newest(int fd, struct frame_msg *msg)
     return TRUE;
 }
 
+/* Live orientation-follow: BS writes the desired videoflip method to FLIP_FILE on device rotation.
+ * Re-read it only when the file's mtime changes (cheap stat per frame) and push it onto the sibling
+ * videoflip. The constant OUT_WxOUT_H output (videoscale add-borders downstream) means a method that
+ * changes the rotated dimensions never renegotiates WebKit's pinned caps. */
+static void qcam_apply_orientation(GstQcamSrc *self)
+{
+    struct stat st;
+    FILE *f;
+    int m;
+    if (stat(FLIP_FILE, &st) != 0 || st.st_mtime == self->flip_mtime)
+        return;
+    self->flip_mtime = st.st_mtime;
+    f = fopen(FLIP_FILE, "r");
+    if (!f) return;
+    if (fscanf(f, "%d", &m) == 1 && m >= 0 && m <= 7 && m != self->flip_method) {
+        if (!self->flip) {
+            GstObject *parent = gst_object_get_parent(GST_OBJECT(self));
+            if (parent) { self->flip = gst_bin_get_by_name(GST_BIN(parent), "qcamflip"); gst_object_unref(parent); }
+        }
+        if (self->flip) {
+            g_object_set(self->flip, "method", m, NULL);
+            self->flip_method = m;
+            GST_INFO_OBJECT(self, "orientation -> videoflip method=%d", m);
+        }
+    }
+    fclose(f);
+}
+
 static GstFlowReturn gst_qcam_src_create(GstPushSrc *push, GstBuffer **out)
 {
     GstQcamSrc *self = GST_QCAM_SRC(push);
@@ -137,6 +198,7 @@ static GstFlowReturn gst_qcam_src_create(GstPushSrc *push, GstBuffer **out)
     int tries;
 
     if (self->sockfd < 0 || !self->shm) return GST_FLOW_ERROR;
+    qcam_apply_orientation(self);
     hdr = (struct qcamd_hdr*)self->shm;
 
     for (tries = 0; tries < 4; tries++) {
@@ -177,6 +239,12 @@ static void gst_qcam_src_init(GstQcamSrc *self)
 {
     self->sockfd = -1;
     self->shm = NULL;
+    self->flip = NULL;
+    self->flip_mtime = 0;
+    self->flip_method = DEFAULT_FLIP;
+    /* Real-time camera: live source. (The historical decodebin3 NOT_LINKED race that made a live
+     * source problematic is gone -- WebKit's capturer no longer inserts decodebin3 for our raw feed,
+     * see ATLAS_CAMERA_NO_DECODEBIN in GStreamerVideoCapturer.cpp -- so the chain is all static pads.) */
     gst_base_src_set_live(GST_BASE_SRC(self), TRUE);
     gst_base_src_set_format(GST_BASE_SRC(self), GST_FORMAT_TIME);
     gst_base_src_set_do_timestamp(GST_BASE_SRC(self), TRUE);
@@ -191,8 +259,9 @@ static void gst_qcam_src_class_init(GstQcamSrcClass *klass)
     gst_element_class_add_static_pad_template(ec, &qcam_src_template);
     gst_element_class_set_static_metadata(ec, "TouchPad Camera Source", "Source/Video",
         "Reads NV12 frames from the qcamd camera daemon", "Atlas");
-    bc->start = gst_qcam_src_start;
-    bc->stop  = gst_qcam_src_stop;
+    bc->start  = gst_qcam_src_start;
+    bc->stop   = gst_qcam_src_stop;
+    bc->fixate = gst_qcam_src_fixate;
     pc->create = gst_qcam_src_create;
 }
 
@@ -211,28 +280,18 @@ G_DEFINE_TYPE(GstQcamDevice, gst_qcam_device, GST_TYPE_DEVICE)
  * is mirrored by the page via CSS, and WebRTC/test sites expect the raw stream. */
 static GstElement *gst_qcam_device_create_element(GstDevice *device, const gchar *name)
 {
-    GstElement *bin, *src, *flip;
-    GstPad *srcpad;
+    /* Build [ qcamsrc ! videoflip ! videoscale(add-borders) ! NV12 OUT_WxOUT_H ] via gst_parse so the
+     * ghost src pad + linking are handled robustly. videoscale add-borders letterboxes the rotated
+     * frame into the CONSTANT OUT_WxOUT_H, so qcamsrc can change the videoflip method live (device
+     * rotation) without ever renegotiating WebKit's pinned capture caps. qcamsrc finds the flip by
+     * the "qcamflip" name to drive its method. */
+    /* Bare NV12 source. WebKit feeds us through decodebin3; qcamsrc is deliberately NON-live (see
+     * gst_qcam_src_init) so basesrc prerolls one frame in PAUSED, letting decodebin3 finish its
+     * data-driven stream-selection and link its internal output pad BEFORE PLAYING streams -- which
+     * avoids the live-source-vs-decodebin3 NOT_LINKED race (a queue upstream can't fix decodebin3's
+     * internal relink, so we fix the timing at the source instead). */
     (void)device;
-
-    src = GST_ELEMENT(g_object_new(GST_TYPE_QCAM_SRC, "name", "qcamrawsrc", NULL));
-    bin = gst_bin_new(name);
-    flip = gst_element_factory_make("videoflip", "qcamflip");
-    if (!bin || !flip) {                         /* degrade to un-rotated raw source */
-        if (bin) gst_object_unref(bin);
-        if (flip) gst_object_unref(flip);
-        return src;
-    }
-    g_object_set(flip, "method", 1 /* GST_VIDEO_FLIP_METHOD_90R = clockwise */, NULL);
-    gst_bin_add_many(GST_BIN(bin), src, flip, NULL);
-    if (!gst_element_link(src, flip)) {
-        gst_object_unref(bin);
-        return GST_ELEMENT(g_object_new(GST_TYPE_QCAM_SRC, "name", name, NULL));
-    }
-    srcpad = gst_element_get_static_pad(flip, "src");
-    gst_element_add_pad(bin, gst_ghost_pad_new("src", srcpad));
-    gst_object_unref(srcpad);
-    return bin;
+    return GST_ELEMENT(g_object_new(GST_TYPE_QCAM_SRC, "name", name, NULL));
 }
 static void gst_qcam_device_init(GstQcamDevice *self) { (void)self; }
 static void gst_qcam_device_class_init(GstQcamDeviceClass *klass)
@@ -242,11 +301,10 @@ static void gst_qcam_device_class_init(GstQcamDeviceClass *klass)
 
 static GstDevice *gst_qcam_device_new(void)
 {
-    /* Advertise the POST-rotation geometry (create_element rotates 90deg CW -> portrait). */
     GstCaps *caps = gst_caps_new_simple("video/x-raw",
         "format", G_TYPE_STRING, "NV12",
-        "width",  G_TYPE_INT, CAM_H,   /* 480 */
-        "height", G_TYPE_INT, CAM_W,   /* 640 */
+        "width",  G_TYPE_INT, CAM_W,   /* 640 */
+        "height", G_TYPE_INT, CAM_H,   /* 480 */
         "framerate", GST_TYPE_FRACTION, 15, 1, NULL);
     GstStructure *props = gst_structure_new("qcam-proplist",
         "node.name", G_TYPE_STRING, "touchpad-front",

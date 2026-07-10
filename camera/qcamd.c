@@ -104,6 +104,21 @@ int main(int argc, char **argv) {
     if (listen(srv_fd, 1) < 0) { perror("qcamd: listen"); return 4; }
     printf("qcamd: ready, shm=%s sock=%s (%d slots x %d)\n", QCAMD_SHM, QCAMD_SOCK, NUM_SLOTS, MAX_FRAME);
 
+    /* HAL lifecycle: previewInit can only run ONCE per qcamd process — a
+     * previewDeInit followed by a later previewInit wedges the control thread
+     * ("control thread is not responding, rc=-1"), which turned every browser
+     * reconnect into a black screen. So init the camera ONCE here at startup and
+     * keep it initialized for the life of the daemon; per-client we only toggle
+     * previewStart/previewStop. previewDeInit happens exactly once, on exit. */
+    {
+        int rc;
+        memset(cfg, 0, sizeof(cfg));
+        set_config(cfg);
+        rc = preview_init();      printf("qcamd: previewInit rc=%d\n", rc);
+        if (rc != 0) { fprintf(stderr, "qcamd: previewInit failed — camera unavailable\n"); }
+        else if (alloc_bufs) { rc = alloc_bufs(); printf("qcamd: allocateBuffers rc=%d\n", rc); }
+    }
+
     while (g_run) {
         uint32_t seq = 0;
         int rc, streaming = 0;
@@ -112,11 +127,6 @@ int main(int argc, char **argv) {
         if (cli_fd < 0) { if (errno==EINTR) break; perror("qcamd: accept"); continue; }
         printf("qcamd: client connected -> starting camera\n");
 
-        memset(cfg, 0, sizeof(cfg));
-        set_config(cfg);
-        rc = preview_init();      printf("qcamd: previewInit rc=%d\n", rc);
-        if (rc != 0) goto client_done;
-        if (alloc_bufs) { rc = alloc_bufs(); printf("qcamd: allocateBuffers rc=%d\n", rc); }
         rc = preview_start();     printf("qcamd: previewStart rc=%d\n", rc);
         if (rc != 0) goto client_done;
         streaming = 1;
@@ -160,13 +170,15 @@ int main(int argc, char **argv) {
 
     client_done:
         if (streaming) {
-            if (preview_stop)   preview_stop();
-            if (preview_deinit) preview_deinit();
+            if (preview_stop)   preview_stop();   /* keep HAL initialized for next client */
         }
         close(cli_fd);
         frame_size = 0;
-        printf("qcamd: client disconnected -> camera stopped\n");
+        printf("qcamd: client disconnected -> preview stopped (HAL kept warm)\n");
     }
+
+    /* Only tear the HAL down on daemon exit — see the once-per-process note above. */
+    if (preview_deinit) { preview_deinit(); printf("qcamd: previewDeInit (exit)\n"); }
 
     close(srv_fd); unlink(QCAMD_SOCK);
     munmap(shm, shm_sz); close(shm_fd); unlink(QCAMD_SHM);

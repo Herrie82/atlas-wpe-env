@@ -40,6 +40,8 @@ export XDG_DATA_DIRS=$D/share:/usr/share
 export GST_OMX_ATLAS_COPY_OUTPUT=1         # reconfigure-safe DPB pmem (copy-mode, no OMX_UseBuffer)
 export ATLAS_MDPDETILE=1                   # HW de-tile via MDP rotator
 export ATLAS_MDP_NOSWAP=1                  # decoder emits CbCr NV12 already -> no chroma swap in de-tile copy-out
+export ATLAS_CAMERA_NO_DECODEBIN=1         # getUserMedia: skip decodebin3 in the capturer (our qcamd feed is raw
+                                           # NV12; decodebin3's dynamic pad races the live source -> NOT_LINKED -> black)
 # Repoint the baked install-prefix resource dirs at cryptofs: libWPEWebKit's PKGLIBEXECDIR/PKGLIBDIR were
 # prefix-patched for the old /media/internal layout, so without these the WebProcess + injected bundle
 # would be looked up under /media/internal (which we no longer populate).
