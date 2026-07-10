@@ -42,12 +42,14 @@ put "$S/lib/libcrypto.so.3" "$DEV/lib/libcrypto.so.3"
 put "$S/lib/libssl.so.3"    "$DEV/lib/libssl.so.3"
 
 echo "=== 2. WebRTC support libs -> $DEV/lib ==="
-for son in libnice.so.10 libsrtp2.so.1 libgstwebrtc-1.0.so.0; do
+# libgstsctp-1.0.so.0 is the SCTP helper lib (webrtcbin NEEDs it); easy to miss vs the sctp plugin.
+for son in libnice.so.10 libsrtp2.so.1 libgstwebrtc-1.0.so.0 libgstsctp-1.0.so.0; do
   real=$(readlink -f "$S/lib/$son"); put "$real" "$DEV/lib/$son"
 done
 
 echo "=== 3. gst webrtc plugins -> $GST_PLUGIN_DIR ==="
-for p in libgstwebrtc.so libgstdtls.so libgstsrtp.so libgstsctp.so libgstrtpmanagerbad.so; do
+# webrtcbin also needs rtpbin (rtpmanager, from gst-plugins-GOOD) — built separately, see build-gst-webrtc.sh.
+for p in libgstwebrtc.so libgstdtls.so libgstsrtp.so libgstsctp.so libgstrtpmanagerbad.so libgstrtpmanager.so; do
   put "$S/lib/gstreamer-1.0/$p" "$GST_PLUGIN_DIR/$p"
 done
 
@@ -68,8 +70,10 @@ echo "=== 5. BrowserServer-atlas ==="
 put "$WPE/browserserver-wpe/obj/BrowserServer-atlas" "$DEV/BrowserServer-atlas"
 
 echo "=== restart atlas, wait for socket ==="
+# MUST clear the GStreamer registry cache so the new plugins (rtpmanager etc.) get rescanned, else
+# webrtcbin fails with 'rtpbin not found'. GST_REGISTRY=/tmp/atlas-gstreg.bin.
 cat <<'SH' | novacom run file://bin/sh
-rm -f /tmp/bs-atlas.log /tmp/yapserver.atlas
+rm -f /tmp/bs-atlas.log /tmp/yapserver.atlas /tmp/atlas-gstreg.bin
 start atlas 2>/dev/null; sleep 5
 i=0; while [ $i -lt 25 ] && [ ! -S /tmp/yapserver.atlas ]; do sleep 1; i=$((i+1)); done
 echo "socket up after $((i+5))s; BS=$(ps -ef|grep -c '[B]rowserServer-atlas')"

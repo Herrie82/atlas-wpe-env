@@ -42,6 +42,20 @@ meson setup _bwebrtc --cross-file "$CROSS" --prefix="$S" --buildtype=release \
 # build+install just the webrtc-relevant plugins to avoid rebuilding the whole set
 ninja -C _bwebrtc > "$L/gstbad.make" 2>&1 && ninja -C _bwebrtc install >> "$L/gstbad.make" 2>&1 \
   || { echo FAIL-GSTBAD; tail -35 "$L/gstbad.make"; exit 1; }
-echo "gst-plugins-bad OK. webrtc-related plugins now in staging:"
+echo "gst-plugins-bad done."
+
+# 4. gst-plugins-GOOD rtpmanager (provides rtpbin — webrtcbin REQUIRES it, else 'rtpbin not found').
+#    Not built in the original staging good-plugins set; build just this plugin.
+stage "gst-plugins-good rtpmanager (rtpbin)"
+cd "$WPE/build/gst-plugins-good-1.20.7"; rm -rf _brtp
+meson setup _brtp --cross-file "$CROSS" --prefix="$S" --buildtype=release \
+  -Drtpmanager=enabled -Dexamples=disabled -Dtests=disabled -Ddoc=disabled -Dnls=disabled \
+  > "$L/gstgood-rtp.cfg" 2>&1 || { echo FAIL-RTP-CFG; tail -25 "$L/gstgood-rtp.cfg"; exit 1; }
+ninja -C _brtp gst/rtpmanager/libgstrtpmanager.so > "$L/gstgood-rtp.make" 2>&1 \
+  || { echo FAIL-RTP; tail -25 "$L/gstgood-rtp.make"; exit 1; }
+cp -f _brtp/gst/rtpmanager/libgstrtpmanager.so "$S/lib/gstreamer-1.0/libgstrtpmanager.so"
+echo "rtpmanager OK"
+
+echo "webrtc-related plugins now in staging:"
 ls "$S"/lib/gstreamer-1.0/ | grep -iE "webrtc|nice|dtls|srtp|sctp|rtpmanager" | sed 's/^/  /'
-echo "GST-WEBRTC-STACK OK"
+echo "GST-WEBRTC-STACK OK. Deploy also needs libgstsctp-1.0.so.0 helper lib + clearing /tmp/atlas-gstreg.bin."
