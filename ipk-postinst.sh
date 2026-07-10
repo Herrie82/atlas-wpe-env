@@ -38,8 +38,18 @@ chmod 755 /etc/event.d/atlas
 mkdir -p /etc/palm/db/kinds /etc/palm/db/permissions
 cp -a "$APP/db/kinds/."       /etc/palm/db/kinds/
 cp -a "$APP/db/permissions/." /etc/palm/db/permissions/
+# LunaService role: authorises BrowserServer-atlas to register org.webosports.browserserver. Install into
+# the ROOTFS ls2 roles (NOT /var/palm/ls2 — a device reset/GC wipes /var and this file with it, after
+# which startService() fails 'Invalid permissions' and BS exits 255 with WebKit already up). prv + pub.
+ROLE="$DR/ls2-roles/org.webosports.browserserver.json"
+[ -f "$ROLE" ] || ROLE="$APP/deviceroot/ls2-roles/org.webosports.browserserver.json"
+if [ -f "$ROLE" ]; then
+  cp -a "$ROLE" /usr/share/ls2/roles/prv/org.webosports.browserserver.json
+  cp -a "$ROLE" /usr/share/ls2/roles/pub/org.webosports.browserserver.json
+fi
 sync
 mount -o remount,ro / 2>/dev/null
+ls-control scan-services 2>/dev/null || true
 
 # 5b. register db8 kinds (then permissions) via the supported configurator path — same as the boot flow.
 log "registering db8 kinds..."

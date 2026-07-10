@@ -17,7 +17,8 @@ ENV=/home/herrie/Documents/GitHub/atlas-wpe-env
 GSR=$HOME/x-tools/arm-unknown-linux-gnueabi-gcc125/arm-unknown-linux-gnueabi/sysroot
 OBJ=$WPE/browserserver-wpe/obj
 CAM=/home/herrie/webos/touchpad-kernel/doctor305/camera-path-a
-IPK=$WPE/atlas-ipk/org.webosports.app.atlas_3.8.0_all.ipk
+APPSRC=/home/herrie/Documents/GitHub/atlas-browser-app   # CURRENT front-end (features+icons), not the stale ipk
+ROLESRC=$ENV/roles/org.webosports.browserserver.json     # LunaService role (lost with /var on reset)
 
 APPNAME=org.webosports.app.atlas
 CRYPTO_APP=/media/cryptofs/apps/usr/palm/applications/$APPNAME
@@ -30,10 +31,11 @@ D=$APP/deviceroot/wpe-252
 A=$APP/deviceroot/atlas
 rm -rf "$OUT"; mkdir -p "$D/lib" "$D/libexec" "$D/share" "$A"
 
-echo "=== 1. app front-end from ipk 3.8.0 ==="
-mkdir -p "$OUT/_ipk"; ( cd "$OUT/_ipk" && ar x "$IPK" && tar xzf data.tar.gz )
-cp -a "$OUT/_ipk/usr/palm/applications/$APPNAME/." "$APP/"
-rm -rf "$OUT/_ipk"
+echo "=== 1. app front-end from CURRENT source (atlas-browser-app) ==="
+for item in appinfo.json css db depends.js index.html source images \
+            icon-1024x1024.png icon-256x256.png icon-48x48.png icon-64x64.png icon.png; do
+  [ -e "$APPSRC/$item" ] && cp -a "$APPSRC/$item" "$APP/"
+done
 
 echo "=== 2. engine lib/ from staging (ONE real file per SONAME — symlink-free, no triplication) ==="
 copy_soname(){ local f="$1" son
@@ -82,6 +84,9 @@ cp -f "$OBJ/BrowserServer-atlas" "$D/BrowserServer-atlas"
 cp -f "$ENV/ipk-build/pull/wrapper-BrowserServer" "$A/BrowserServer"   # upstart execs ./BrowserServer
 cp -f "$CAM/qcamd" "$A/qcamd"                                          # runs under SYSTEM glibc — do NOT patchelf/strip
 chmod +x "$A/BrowserServer" "$A/qcamd" "$D/BrowserServer-atlas"
+# LunaService role file — activate installs it into rootfs ls2 roles. WITHOUT it startService() fails
+# ('Invalid permissions for org.webosports.browserserver') and BS exits 255 after WebKit init.
+mkdir -p "$APP/deviceroot/ls2-roles"; cp -f "$ROLESRC" "$APP/deviceroot/ls2-roles/"
 
 if [ "$DOSTRIP" = 1 ]; then
   echo "=== 9. strip engine (STRIP=0 to keep symbols) ==="

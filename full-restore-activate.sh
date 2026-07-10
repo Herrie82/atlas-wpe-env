@@ -38,6 +38,24 @@ echo "== 5. perms + fresh gst registry =="
 chmod 755 "$DR/atlas/BrowserServer" "$DR/atlas/qcamd" "$D/BrowserServer-atlas" 2>/dev/null || true
 rm -f /tmp/atlas-gstreg.bin
 
+echo "== 5b. LunaService role file (THE thing that was lost with /var) =="
+# Without this, ls-hubd rejects BS: 'No role file for executable ... Invalid permissions for
+# org.webosports.browserserver' and startService() returns -1 -> BS exits 255 with WebKit already
+# initialised. Install into the ROOTFS ls2 roles (survives the /var wipe that dropped the app), both
+# prv and pub, then rescan the hub. The role is bundled in the app dir at deviceroot/ls2-roles/.
+ROLE="$DR/ls2-roles/org.webosports.browserserver.json"
+if [ -f "$ROLE" ]; then
+  mount -o remount,rw / 2>/dev/null
+  cp -f "$ROLE" /usr/share/ls2/roles/prv/org.webosports.browserserver.json
+  cp -f "$ROLE" /usr/share/ls2/roles/pub/org.webosports.browserserver.json
+  chmod 644 /usr/share/ls2/roles/prv/org.webosports.browserserver.json /usr/share/ls2/roles/pub/org.webosports.browserserver.json
+  sync; mount -o remount,ro / 2>/dev/null
+  ls-control scan-services 2>/dev/null || true
+  echo "  role installed + hub rescanned"
+else
+  echo "  WARN: role file missing at $ROLE -> BS startService will fail (Invalid permissions)"
+fi
+
 echo "== 6. register app + start engine + reload LunaSysMgr =="
 luna-send -n 1 -f luna://com.palm.applicationManager/rescan '{}' 2>/dev/null || true
 start atlas 2>/dev/null || true
