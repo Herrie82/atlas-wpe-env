@@ -93,6 +93,28 @@ mkdir -p "$APP/deviceroot/BrowserPlugins" "$APP/deviceroot/event.d"
 cp -f "$ENV/ipk-build/pull/BrowserAdapterAtlas.so" "$APP/deviceroot/BrowserPlugins/"
 cp -f "$ENV/ipk-build/pull/upstart-atlas"          "$APP/deviceroot/event.d/atlas"
 
+echo "=== 8b. WebRTC-completeness guard (regression trap) ==="
+# The WebRTC stack is assembled by COPYING the whole staging gstreamer-1.0/ dir + all staging libs (steps
+# 2a/2b) — so it is only complete if these were built into staging first (build-gst-webrtc.sh = transport,
+# build-gst-webrtc-media.sh = codecs/RTP). A missing plugin ships a browser that shows only "Local Preview"
+# on video calls. Fail LOUD here instead of silently shipping that. Split: transport (data channels) vs
+# media (audio/video calls). Codec libs (libvpx/libopus) are picked up by the step-2a *.so loop.
+gst="$D/lib/gstreamer-1.0"
+miss=""
+for p in libgstwebrtc.so libgstnice.so libgstdtls.so libgstsrtp.so libgstsctp.so libgstrtpmanager.so \
+         libgstrtp.so libgstvpx.so libgstopus.so; do
+  [ -f "$gst/$p" ] || miss="$miss $p"
+done
+for l in libnice.so.10 libsrtp2.so.1 libvpx.so.8 libopus.so.0; do
+  ls "$D/lib/$l"* >/dev/null 2>&1 || miss="$miss $l"
+done
+if [ -n "$miss" ]; then
+  echo "  !! WebRTC INCOMPLETE — missing from staging:$miss"
+  echo "  !! run build-gst-webrtc.sh (transport) and/or build-gst-webrtc-media.sh (codecs) then re-run."
+  exit 1
+fi
+echo "  WebRTC transport+media plugins all present."
+
 if [ "$DOSTRIP" = 1 ]; then
   echo "=== 9. strip engine (STRIP=0 to keep symbols) ==="
   find "$D/lib" "$D/libexec" -type f -name '*.so*' -exec "$TARGET-strip" {} + 2>/dev/null || true
