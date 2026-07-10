@@ -10,8 +10,10 @@
 # utterance up front and serves it in back-to-back 1024-sample buffers in microseconds; with
 # do-timestamp every buffer is stamped with the wall-clock at push time, so all ~N buffers
 # cluster at nearly the same timestamp. An audio sink with a small ring buffer then drops all
-# but the first few as "too late" -> plops. (The soundtouch 'pitch' element had been masking
-# this by buffering internally; it is broken on our softfp build and is disabled on-device.)
+# but the first few as "too late" -> plops. (The soundtouch 'pitch' element had been *masking*
+# this by buffering internally, which made it look like pitch itself was broken -- it is not.
+# With this fix the pitch element works correctly and pitch shifting up/down is clean, so the
+# soundtouch plugin stays enabled on-device.)
 #
 # Fix: behave as a normal NON-live source with explicit monotonic per-buffer PTS/duration
 # (bytes/bpf -> frames -> running time), so the audio sink schedules the full utterance across
