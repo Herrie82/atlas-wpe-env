@@ -115,6 +115,22 @@ if [ -n "$miss" ]; then
 fi
 echo "  WebRTC transport+media plugins all present."
 
+echo "=== 8c. WebGL/ANGLE-fix guard (regression trap) ==="
+# libWPEWebKit is copied from staging (step 2a). If staging holds a build made BEFORE the Adreno-220
+# WebGL fix (ANGLE FunctionsEGLDL libGLESv2.so dlopen fallback, commit 09bee16 / patch
+# wpe-2.52.4-atlas-webgl-angle-fixes.patch), the WebProcess SIGSEGVs on any WebGL page (glGetString via
+# NULL) — html5test.co and every WebGL site crash. This exact regression shipped once when a full-reset
+# restore pulled a stale staging binary. The fix compiles a `dlopen("libGLESv2.so")` — its arg string is
+# a reliable presence marker. Fail LOUD if the assembled engine lacks it.
+if strings -a "$D/lib/libWPEWebKit-2.0.so.1" 2>/dev/null | grep -q '^libGLESv2\.so$'; then
+  echo "  WebGL/ANGLE core-GL fallback present (libGLESv2.so dlopen)."
+else
+  echo "  !! libWPEWebKit LACKS the Adreno WebGL fix — WebGL pages will SIGSEGV the WebProcess."
+  echo "  !! staging is stale. Refresh: cp <wpewebkit>/_b/lib/libWPEWebKit-2.0.so.1.9.8 $S/lib/"
+  echo "  !! (source patch = wpe-2.52.4-atlas-webgl-angle-fixes.patch, must be built into the lib)."
+  exit 1
+fi
+
 if [ "$DOSTRIP" = 1 ]; then
   echo "=== 9. strip engine (STRIP=0 to keep symbols) ==="
   find "$D/lib" "$D/libexec" -type f -name '*.so*' -exec "$TARGET-strip" {} + 2>/dev/null || true
