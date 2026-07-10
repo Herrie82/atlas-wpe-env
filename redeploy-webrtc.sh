@@ -48,8 +48,10 @@ for son in libnice.so.10 libsrtp2.so.1 libgstwebrtc-1.0.so.0 libgstsctp-1.0.so.0
 done
 
 echo "=== 3. gst webrtc plugins -> $GST_PLUGIN_DIR ==="
-# webrtcbin also needs rtpbin (rtpmanager, from gst-plugins-GOOD) — built separately, see build-gst-webrtc.sh.
-for p in libgstwebrtc.so libgstdtls.so libgstsrtp.so libgstsctp.so libgstrtpmanagerbad.so libgstrtpmanager.so; do
+# webrtcbin also needs rtpbin (rtpmanager, from gst-plugins-GOOD) AND libgstnice.so (the libnice GStreamer
+# plugin — provides nicesrc/nicesink ICE transport; without it webrtcbin aborts data-channel creation with
+# "libnice elements are not available"). Both built separately, see build-gst-webrtc.sh.
+for p in libgstwebrtc.so libgstdtls.so libgstsrtp.so libgstsctp.so libgstrtpmanagerbad.so libgstrtpmanager.so libgstnice.so; do
   put "$S/lib/gstreamer-1.0/$p" "$GST_PLUGIN_DIR/$p"
 done
 

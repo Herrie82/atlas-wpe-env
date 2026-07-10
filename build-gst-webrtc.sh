@@ -20,16 +20,20 @@ ninja -C _b > "$L/srtp.make" 2>&1 && ninja -C _b install >> "$L/srtp.make" 2>&1 
   || { echo FAIL-SRTP; tail -25 "$L/srtp.make"; exit 1; }
 echo "libsrtp2 OK: $(ls "$S"/lib/libsrtp2.so* 2>/dev/null | sed 's|.*/||' | tr '\n' ' ')"
 
-# 2. libnice (meson, openssl crypto, lib only)
-stage "libnice 0.1.21"
+# 2. libnice (meson, openssl crypto) — MUST build the GStreamer plugin (libgstnice.so), NOT just the lib.
+#    webrtcbin uses the nicesrc/nicesink elements for ICE transport; without the plugin it fails with
+#    "libnice elements are not available" and RTCDataChannel creation aborts (is_closed assertion) — the
+#    data channel never opens. -Dgstreamer=enabled produces + installs $S/lib/gstreamer-1.0/libgstnice.so.
+stage "libnice 0.1.21 (+GStreamer plugin)"
 cd "$WPE/build"; rm -rf libnice-0.1.21; tar xf "$WPE/src/libnice-0.1.21.tar.gz" -C .
 cd libnice-0.1.21
 meson setup _b --cross-file "$CROSS" --prefix="$S" --buildtype=release \
-  -Dgstreamer=disabled -Dexamples=disabled -Dtests=disabled -Dintrospection=disabled \
+  -Dgstreamer=enabled -Dexamples=disabled -Dtests=disabled -Dintrospection=disabled -Dgupnp=disabled \
   -Dcrypto-library=openssl > "$L/nice.cfg" 2>&1 || { echo FAIL-NICE-CFG; tail -25 "$L/nice.cfg"; exit 1; }
 ninja -C _b > "$L/nice.make" 2>&1 && ninja -C _b install >> "$L/nice.make" 2>&1 \
   || { echo FAIL-NICE; tail -25 "$L/nice.make"; exit 1; }
 echo "libnice OK: $(ls "$S"/lib/libnice.so* 2>/dev/null | sed 's|.*/||' | tr '\n' ' ')"
+echo "libgstnice plugin: $(ls "$S"/lib/gstreamer-1.0/libgstnice.so 2>/dev/null || echo MISSING)"
 
 # 3. gst-plugins-bad — webrtc/nice/dtls/srtp (+ sctp auto for data channels). auto elsewhere reproduces the
 #    existing plugin set from available deps. Installs to staging; verify before deploy.
