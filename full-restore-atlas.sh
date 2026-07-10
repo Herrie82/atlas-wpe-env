@@ -87,6 +87,11 @@ chmod +x "$A/BrowserServer" "$A/qcamd" "$D/BrowserServer-atlas"
 # LunaService role file — activate installs it into rootfs ls2 roles. WITHOUT it startService() fails
 # ('Invalid permissions for org.webosports.browserserver') and BS exits 255 after WebKit init.
 mkdir -p "$APP/deviceroot/ls2-roles"; cp -f "$ROLESRC" "$APP/deviceroot/ls2-roles/"
+# Rootfs-install artifacts the postinst lays down (needed for a clean ipk install; the restore path
+# skips them because rootfs survives a /var wipe): NPAPI adapter + upstart job.
+mkdir -p "$APP/deviceroot/BrowserPlugins" "$APP/deviceroot/event.d"
+cp -f "$ENV/ipk-build/pull/BrowserAdapterAtlas.so" "$APP/deviceroot/BrowserPlugins/"
+cp -f "$ENV/ipk-build/pull/upstart-atlas"          "$APP/deviceroot/event.d/atlas"
 
 if [ "$DOSTRIP" = 1 ]; then
   echo "=== 9. strip engine (STRIP=0 to keep symbols) ==="
