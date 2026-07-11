@@ -261,6 +261,15 @@ int main(int argc, char **argv){
     setbuf(stdout, NULL); setbuf(stderr, NULL);
     memset(&S, 0, sizeof(S)); S.cli_fd = S.fifo_fd = -1;
 
+    /* --- LunaService FIRST (before the shared socket): a duplicate qmicd must fail LSRegister
+     * ("already exists") and exit HERE, before unlink()'ing + rebinding the running instance's
+     * /tmp/qmicd.sock — otherwise it leaves a dead socket and qmicsrc gets "Connection refused". --- */
+    S.loop = g_main_loop_new(NULL, FALSE);
+    LSError e; LSErrorInit(&e);
+    if (!LSRegister(QMICD_SVC, &S.ls, &e)) { fprintf(stderr, "qmicd: LSRegister: %s\n", e.message); return 5; }
+    if (!LSGmainAttach(S.ls, S.loop, &e))  { fprintf(stderr, "qmicd: LSGmainAttach: %s\n", e.message); return 5; }
+    fprintf(stderr, "qmicd: LS registered + attached\n");
+
     /* --- shm --- */
     size_t shm_sz = SLOT0_OFF + (size_t)NUM_SLOTS * CHUNK_BYTES;
     int shm_fd = open(QMICD_SHM, O_RDWR|O_CREAT|O_TRUNC, 0666);
@@ -280,18 +289,6 @@ int main(int argc, char **argv){
     addr.sun_family = AF_UNIX; strncpy(addr.sun_path, QMICD_SOCK, sizeof(addr.sun_path)-1);
     if (bind(S.srv_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) { perror("qmicd: bind"); return 4; }
     chmod(QMICD_SOCK, 0666); listen(S.srv_fd, 1);
-    fprintf(stderr, "qmicd: [2] socket listening\n");
-
-    /* --- LunaService + glib main loop --- */
-    S.loop = g_main_loop_new(NULL, FALSE);
-    fprintf(stderr, "qmicd: [3] loop created\n");
-    LSError e; LSErrorInit(&e);
-    /* [TODO] role file: /usr/share/ls2/roles/{pub,prv}/org.webosports.qmicd.json granting
-     * outbound calls to com.palm.mediad + com.palm.mediad.MediaCaptureV3_* (and inbound none). */
-    if (!LSRegister(QMICD_SVC, &S.ls, &e)) { fprintf(stderr, "qmicd: LSRegister: %s\n", e.message); return 5; }
-    fprintf(stderr, "qmicd: [4] LSRegister ok\n");
-    if (!LSGmainAttach(S.ls, S.loop, &e))  { fprintf(stderr, "qmicd: LSGmainAttach: %s\n", e.message); return 5; }
-    fprintf(stderr, "qmicd: [5] attached\n");
 
     GIOChannel *sc = g_io_channel_unix_new(S.srv_fd);
     g_io_add_watch(sc, G_IO_IN, on_accept, NULL); g_io_channel_unref(sc);
