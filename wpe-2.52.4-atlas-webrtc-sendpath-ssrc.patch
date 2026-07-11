@@ -1,0 +1,24 @@
+--- a/Source/WebCore/platform/mediastream/gstreamer/RealtimeOutgoingMediaSourceGStreamer.cpp	2026-07-11 23:42:06.014698835 +0200
++++ b/Source/WebCore/platform/mediastream/gstreamer/RealtimeOutgoingMediaSourceGStreamer.cpp	2026-07-11 23:22:45.756230050 +0200
+@@ -495,6 +495,21 @@
+     if (gst_caps_is_empty(codecPreferences.get()) || gst_caps_is_any(codecPreferences.get())) [[unlikely]]
+         return false;
+ 
++    // Stamp this sender's stable SSRC (the one already signalled as a=ssrc in the LOCAL SDP via
++    // allowedCaps()) onto every codec structure, so the packetizer's payloader emits RTP carrying the
++    // SAME ssrc webrtcbin negotiated. The transceiver's post-negotiation codec-preferences do NOT carry
++    // it back (a=ssrc lives on the SDP media, not the codec structure), so without this the payloader
++    // mints its own ssrc: webrtcbin's send pad then sees an unexpected ssrc, never forwards the RTP,
++    // and the resulting backpressure stalls the encoder -> packetsSent stays 0. See GStreamer{Audio,
++    // Video}RTPPacketizer::create(), which reuses a pre-set "ssrc" field instead of generating one.
++    if (m_ssrc) {
++        codecPreferences = adoptGRef(gst_caps_make_writable(codecPreferences.leakRef()));
++        unsigned totalStructures = gst_caps_get_size(codecPreferences.get());
++        for (unsigned i = 0; i < totalStructures; i++)
++            gst_structure_set(gst_caps_get_structure(codecPreferences.get(), i), "ssrc", G_TYPE_UINT, m_ssrc, nullptr);
++        GST_DEBUG_OBJECT(m_bin.get(), "Stamped sender SSRC %u onto codec preferences: %" GST_PTR_FORMAT, m_ssrc, codecPreferences.get());
++    }
++
+     auto inputSelectorSrcPad = adoptGRef(gst_element_get_static_pad(m_inputSelector.get(), "src"));
+     if (!gst_pad_is_linked(inputSelectorSrcPad.get()) && !gst_element_link(m_inputSelector.get(), m_tee.get()))
+         return false;

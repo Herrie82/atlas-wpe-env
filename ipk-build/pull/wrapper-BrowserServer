@@ -24,7 +24,7 @@ export LD_LIBRARY_PATH=$D/lib:$ATLAS:/usr/lib/ssl11:/usr/lib:/lib
 # (== its LS2 role exeName) or ls-hubd denies LSRegister ("Invalid permissions"). It drives a webOS
 # media-server captureV3 recording (the only way to clock the DMIC on the Qualcomm QDSP; hw:0 capture
 # is exclusive + silent otherwise) and republishes S16LE PCM to /tmp/qmicd.sock for libgstqmicsrc.so.
-if [ -x "$ATLAS/qmicd" ] && ! ps -ef 2>/dev/null | grep -q '[q]micd'; then
+if [ -x "$ATLAS/qmicd" ] && ! pgrep qmicd >/dev/null 2>&1; then
     "$ATLAS/qmicd" >/tmp/qmicd.log 2>&1 &
 fi
 export WPE_BACKEND_LIBRARY=$D/lib/libWPEBackend-atlas.so
