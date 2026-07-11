@@ -66,12 +66,22 @@ echo "=== 4. Atlas components (backend, alsa plugin) ==="
 cp -f "$WPE/backend-atlas/libWPEBackend-atlas.so" "$D/lib/libWPEBackend-atlas.so"
 if [ -f "$WPE/libgstalsa.so" ]; then cp -f "$WPE/libgstalsa.so" "$D/lib/gstreamer-1.0/libgstalsa.so";
 else echo "  WARN: libgstalsa.so missing (mic/speaker won't enumerate) — run audio/build-alsa-plugin.sh"; fi
+# Camera GStreamer source (GstQcamSrc + GstQcamDevProvider) — surfaces the TouchPad front camera as a
+# Video/Source device for getUserMedia. WITHOUT it navigator.mediaDevices sees videoin=0 (WebRTC shows
+# "Local Preview only"). Not in staging (custom, built in camera-path-a); must be copied explicitly.
+if [ -f "$CAM/libgstqcamsrc.so" ]; then cp -f "$CAM/libgstqcamsrc.so" "$D/lib/gstreamer-1.0/libgstqcamsrc.so";
+else echo "  WARN: libgstqcamsrc.so missing (camera won't enumerate) — build it in camera-path-a"; fi
+# Microphone GStreamer source (GstQmicSrc + GstQmicDevProvider) — surfaces the TouchPad DMIC as an
+# Audio/Source ("TouchPad Microphone") for getUserMedia. The mic is a QDSP digital mic; qmicd drives a
+# media-server captureV3 recording to clock it (hw:0 capture alone = silence). Built in mic/build.sh.
+if [ -f "$ENV/mic/libgstqmicsrc.so" ]; then cp -f "$ENV/mic/libgstqmicsrc.so" "$D/lib/gstreamer-1.0/libgstqmicsrc.so";
+else echo "  WARN: libgstqmicsrc.so missing (mic won't enumerate) — run mic/build.sh"; fi
 
 echo "=== 5. libexec (WebProcess/NetworkProcess + gst scanner) ==="
 cp -rL "$S/libexec/." "$D/libexec/"
 
 echo "=== 6. share/ (pruned) ==="
-for sd in glib-2.0 mime dbus-1 gstreamer-1.0 p11-kit icu themes locale/en; do
+for sd in glib-2.0 mime dbus-1 gstreamer-1.0 p11-kit icu themes locale/en alsa; do  # alsa: alsa.conf+cards/pcm — libasound needs it or mic/speaker enumerate 0 devices (WebRTC "Local Preview only")
   [ -e "$S/share/$sd" ] && { mkdir -p "$D/share/$(dirname "$sd")"; cp -rL "$S/share/$sd" "$D/share/$sd"; } || true
 done
 
@@ -83,10 +93,18 @@ echo "=== 8. BrowserServer-atlas + atlas/ (wrapper, qcamd) ==="
 cp -f "$OBJ/BrowserServer-atlas" "$D/BrowserServer-atlas"
 cp -f "$ENV/ipk-build/pull/wrapper-BrowserServer" "$A/BrowserServer"   # upstart execs ./BrowserServer
 cp -f "$CAM/qcamd" "$A/qcamd"                                          # runs under SYSTEM glibc — do NOT patchelf/strip
-chmod +x "$A/BrowserServer" "$A/qcamd" "$D/BrowserServer-atlas"
-# LunaService role file — activate installs it into rootfs ls2 roles. WITHOUT it startService() fails
-# ('Invalid permissions for org.webosports.browserserver') and BS exits 255 after WebKit init.
+cp -f "$ENV/mic/qmicd" "$A/qmicd"                                      # ATLAS glibc-2.52 (ld-linux+rpath baked); the wrapper
+                                                                      # starts it AFTER the atlas LD_LIBRARY_PATH export. MUST
+                                                                      # run from $A/qmicd (== its ls2 role exeName) or ls-hubd denies it.
+chmod +x "$A/BrowserServer" "$A/qcamd" "$A/qmicd" "$D/BrowserServer-atlas"
+# LunaService role files — activate installs them into rootfs ls2 roles. WITHOUT the role startService()/
+# LSRegister fails ('Invalid permissions for org.webosports.<svc>'): BS exits 255; qmicd can't record.
 mkdir -p "$APP/deviceroot/ls2-roles"; cp -f "$ROLESRC" "$APP/deviceroot/ls2-roles/"
+cp -f "$ENV/roles/org.webosports.qmicd.json" "$APP/deviceroot/ls2-roles/"
+[ -f "$ENV/mic/msm_media_case" ] && cp -f "$ENV/mic/msm_media_case" "$APP/deviceroot/msm_media_case"  # activate installs -> rootfs UCM
+# NOTE (rootfs, not app): the mic also needs /usr/share/alsa/ucm/msm-audio/msm_media_case (absent on
+# webOS 3.0.5, present in doctor306-opal) — it defines the UCM Force-route/DMIC capture route audiod
+# applies. Deploy it once to the rootfs (mount -o remount,rw /; cp; reboot) — see full-restore-activate.sh.
 # Rootfs-install artifacts the postinst lays down (needed for a clean ipk install; the restore path
 # skips them because rootfs survives a /var wipe): NPAPI adapter + upstart job.
 mkdir -p "$APP/deviceroot/BrowserPlugins" "$APP/deviceroot/event.d"

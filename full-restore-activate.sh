@@ -49,9 +49,19 @@ if [ -f "$ROLE" ]; then
   cp -f "$ROLE" /usr/share/ls2/roles/prv/org.webosports.browserserver.json
   cp -f "$ROLE" /usr/share/ls2/roles/pub/org.webosports.browserserver.json
   chmod 644 /usr/share/ls2/roles/prv/org.webosports.browserserver.json /usr/share/ls2/roles/pub/org.webosports.browserserver.json
+  # qmicd role (microphone daemon) — same requirement (LSRegister denied without it).
+  QROLE="$DR/ls2-roles/org.webosports.qmicd.json"
+  if [ -f "$QROLE" ]; then
+    cp -f "$QROLE" /usr/share/ls2/roles/prv/org.webosports.qmicd.json
+    cp -f "$QROLE" /usr/share/ls2/roles/pub/org.webosports.qmicd.json
+    chmod 644 /usr/share/ls2/roles/prv/org.webosports.qmicd.json /usr/share/ls2/roles/pub/org.webosports.qmicd.json
+  fi
+  # msm_media_case (mic UCM route) — absent on webOS 3.0.5, bundled from 3.0.6. audiod's
+  # ucm_set(_enadev,Force-route.0) has nothing to apply without it -> DMIC dead.
+  [ -f "$DR/msm_media_case" ] && cp -f "$DR/msm_media_case" /usr/share/alsa/ucm/msm-audio/msm_media_case
   sync; mount -o remount,ro / 2>/dev/null
   ls-control scan-services 2>/dev/null || true
-  echo "  role installed + hub rescanned"
+  echo "  roles + msm_media_case installed (NOTE: ls-hubd registers roles at BOOT — reboot once if LSRegister still denied)"
 else
   echo "  WARN: role file missing at $ROLE -> BS startService will fail (Invalid permissions)"
 fi

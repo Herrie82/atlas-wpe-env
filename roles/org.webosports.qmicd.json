@@ -1,0 +1,14 @@
+{
+    "role": {
+        "exeName": "/media/cryptofs/apps/usr/palm/applications/org.webosports.app.atlas/deviceroot/atlas/qmicd",
+        "type": "privileged",
+        "allowedNames": ["org.webosports.qmicd", ""]
+    },
+    "permissions": [
+        {
+            "service": "org.webosports.qmicd",
+            "inbound": [],
+            "outbound": ["com.palm.mediad", "com.palm.mediad.*", "com.palm.media", "com.palm.media.*"]
+        }
+    ]
+}

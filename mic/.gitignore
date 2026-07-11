@@ -1,0 +1,4 @@
+qmicd
+libgstqmicsrc.so
+qmicd_testclient
+*.o

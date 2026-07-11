@@ -18,6 +18,15 @@ fi
 cp -f $D/lib/libWPEBackend-atlas.so $D/lib/libWPEBackend-default.so 2>/dev/null
 export BPWPE_DEBUG=1
 export LD_LIBRARY_PATH=$D/lib:$ATLAS:/usr/lib/ssl11:/usr/lib:/lib
+# Microphone daemon (getUserMedia bridge, $ATLAS/qmicd) — the analog of qcamd for audio. Unlike
+# qcamd it's an ATLAS glibc-2.52 binary, so it starts HERE, AFTER the atlas LD_LIBRARY_PATH export
+# (it needs $D/lib's glib-2.70 + the system liblunaservice/cjson). MUST be started from $ATLAS/qmicd
+# (== its LS2 role exeName) or ls-hubd denies LSRegister ("Invalid permissions"). It drives a webOS
+# media-server captureV3 recording (the only way to clock the DMIC on the Qualcomm QDSP; hw:0 capture
+# is exclusive + silent otherwise) and republishes S16LE PCM to /tmp/qmicd.sock for libgstqmicsrc.so.
+if [ -x "$ATLAS/qmicd" ] && ! ps -ef 2>/dev/null | grep -q '[q]micd'; then
+    "$ATLAS/qmicd" >/tmp/qmicd.log 2>&1 &
+fi
 export WPE_BACKEND_LIBRARY=$D/lib/libWPEBackend-atlas.so
 export QT_QPA_PLATFORM=Minimal QT_QPA_PLATFORM_PLUGIN_PATH=/usr/plugins/platforms QT_PLUGIN_PATH=/usr/plugins
 export FONTCONFIG_FILE=$D/fonts.conf GIO_MODULE_DIR=$D/lib/gio/modules GIO_USE_TLS=openssl SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
