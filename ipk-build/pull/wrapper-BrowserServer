@@ -67,6 +67,12 @@ export GST_OMX_CONFIG_DIR=$D
 export GST_PLUGIN_SCANNER=$D/libexec/gstreamer-1.0/gst-plugin-scanner
 export GST_REGISTRY=/tmp/atlas-gstreg.bin
 export GST_DEBUG=2,webkitregistryscanner:6,omxvideodec:4
+# Build the gst plugin registry IN-PROCESS (no forked gst-plugin-scanner). The external scanner helper
+# SIGSEGVs when it runs (its baked rpath pointed at a host staging dir; even patched it crashes during
+# plugin introspection), which — before the crash-freeze containment — triggered a 5s minicore stall on
+# every registry rebuild. In-process build is the path GStreamer already fell back to (registry is
+# identical, getUserMedia/webrtc verified), so this just makes it the default and kills the scanner crash.
+export GST_REGISTRY_FORK=no
 export XDG_DATA_DIRS=$D/share:/usr/share
 export GST_OMX_ATLAS_COPY_OUTPUT=1         # reconfigure-safe DPB pmem (copy-mode, no OMX_UseBuffer)
 export ATLAS_MDPDETILE=1                   # HW de-tile via MDP rotator
