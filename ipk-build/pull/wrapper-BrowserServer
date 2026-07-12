@@ -25,7 +25,14 @@ if [ -x "$ATLAS/qcamd" ] && ! ps -ef 2>/dev/null | grep -q '[q]camd'; then
 fi
 cp -f $D/lib/libWPEBackend-atlas.so $D/lib/libWPEBackend-default.so 2>/dev/null
 export BPWPE_DEBUG=1
-export LD_LIBRARY_PATH=$D/lib:$ATLAS:/usr/lib/ssl11:/usr/lib:/lib
+# Do NOT put the atlas $D/lib (glibc-2.52 + ld-linux.so.3) on LD_LIBRARY_PATH: it is INHERITED by the
+# kernel crash path (minicore2 replays a crashed atlas proc's env to run busybox pgrep/rm), which then
+# SIGSEGV (system ld-linux 2.8 loading atlas libc 2.52) and cascade into a device hard-lockup (2026-07-12).
+# All atlas binaries + gst plugins + gio TLS module are rpath-complete (verified: clean-env not-found=0),
+# so LD_LIBRARY_PATH is only kept for system paths (harmless to busybox). NOTE: deploy MUST patchelf a
+# device rpath onto $D/libexec/gstreamer-1.0/gst-plugin-scanner (its baked rpath points at a host staging
+# dir) or the registry scanner subprocess fails to find libgstreamer-1.0 and falls back to in-process.
+export LD_LIBRARY_PATH=/usr/lib/ssl11:/usr/lib:/lib
 # Microphone daemon (getUserMedia bridge, $ATLAS/qmicd) — the analog of qcamd for audio. Unlike
 # qcamd it's an ATLAS glibc-2.52 binary, so it starts HERE, AFTER the atlas LD_LIBRARY_PATH export
 # (it needs $D/lib's glib-2.70 + the system liblunaservice/cjson). MUST be started from $ATLAS/qmicd
