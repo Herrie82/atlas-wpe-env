@@ -1,0 +1,42 @@
+--- a/Source/WebCore/platform/mediastream/gstreamer/GStreamerAudioRTPPacketizer.cpp
++++ b/Source/WebCore/platform/mediastream/gstreamer/GStreamerAudioRTPPacketizer.cpp
+@@ -88,18 +88,13 @@
+             gst_structure_remove_field(structure.get(), "useinbandfec");
+         }
+ 
+-        if (auto isStereo = gstStructureGetString(structure.get(), "stereo"_s)) {
+-            if (isStereo == "1"_s)
+-                inputCaps = adoptGRef(gst_caps_new_simple("audio/x-raw", "channels", G_TYPE_INT, 2, nullptr));
+-            gst_structure_remove_field(structure.get(), "stereo");
+-        }
+-
+-        if (gst_caps_is_any(inputCaps.get())) {
+-            if (auto encodingParameters = gstStructureGetString(structure.get(), "encoding-params"_s)) {
+-                if (auto channels = parseIntegerAllowingTrailingJunk<int>(encodingParameters.span()))
+-                    inputCaps = adoptGRef(gst_caps_new_simple("audio/x-raw", "channels", G_TYPE_INT, *channels, nullptr));
+-            }
+-        }
++        // Atlas/TouchPad: the only real audio source (getUserMedia mic) is a SINGLE MONO capsule
++        // (Topaz schematic sheet 16: one MIC_OUT -> WM8958 IN1LN, biased by codec MICBIAS1). Always
++        // encode mono Opus regardless of the negotiated stereo / encoding-params=2: upmixing the mono
++        // mic to fake stereo wastes bitrate and feeds a 2ch buffer into a 1ch pipeline. Receive/playback
++        // is unaffected (that path is stereo-capable for the stereo speakers). Force channels=1 here.
++        inputCaps = adoptGRef(gst_caps_new_simple("audio/x-raw", "channels", G_TYPE_INT, 1, nullptr));
++        gst_structure_remove_field(structure.get(), "stereo");
+     } else if (encoding == "g722"_s)
+         encoder = makeGStreamerElement("avenc_g722"_s);
+     else if (encoding == "pcma"_s)
+--- a/Source/WebCore/Modules/mediastream/gstreamer/GStreamerMediaEndpoint.cpp
++++ b/Source/WebCore/Modules/mediastream/gstreamer/GStreamerMediaEndpoint.cpp
+@@ -1787,6 +1787,11 @@
+             gst_structure_set(structure, "payload", G_TYPE_INT, payloadType++, nullptr);
+         if (senderSsrc)
+             gst_structure_set(structure, "ssrc", G_TYPE_UINT, senderSsrc, nullptr);
++        // Atlas: signal mono Opus on the SEND path (the mic is a single mono capsule; see
++        // GStreamerAudioRTPPacketizer). sprop-stereo=0 tells the peer we transmit mono, matching the
++        // mono encoder input, and avoids the stereo channel-count mismatch on the outgoing stream.
++        if (auto encodingName = gstStructureGetString(structure, "encoding-name"_s); encodingName == "OPUS"_s)
++            gst_structure_set(structure, "sprop-stereo", G_TYPE_STRING, "0", nullptr);
+         if (msidSet)
+             return;
+         if (msid.isEmpty())
