@@ -2,6 +2,14 @@
 # WPE 2.52 ATLAS BrowserServer boot wrapper (org.webosports.app.atlas). Exec'd by the `atlas` upstart job.
 # Runs the engine IN PLACE from the app's cryptofs deviceroot — NOTHING is copied to /media/internal.
 case "$*" in *offscreen*) exit 0 ;; esac
+# CONTAINMENT (2026-07-12 hard-lockup): the kernel freezes every crashing process up to
+# minicore_timeout seconds (default 60) waiting for /usr/sbin/minicore2 to attach. Our atlas
+# LD_LIBRARY_PATH points system busybox tools (pgrep/rm run by the crash path) at the atlas glibc/
+# ld-linux, so they SIGSEGV -> each re-enters minicore -> a cascade of 60s freezes piles up and wedges
+# the whole device (display MDP starves -> hard lockup requiring a forced reset). Bound the freeze so a
+# single crash (or a storm of them) can never take the device down. 5s still lets minicore2 capture
+# normal cores; raise it temporarily when you actually need a full BS core for debugging.
+[ -w /proc/sys/kernel/minicore_timeout ] && echo 5 > /proc/sys/kernel/minicore_timeout 2>/dev/null
 i=0; while [ $i -lt 90 ] && ! ps -ef 2>/dev/null | grep -q '[L]unaSysMgr'; do sleep 1; i=$((i+1)); done
 sleep 3
 mount -o remount,size=131072k /dev 2>/dev/null
