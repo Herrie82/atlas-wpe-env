@@ -52,7 +52,12 @@ export JSC_forceRAMSize=201326592         # bias JS heaps to a ~192MB budget -> 
                                           # (was 256MB; clean reboot-per-config sweep 2026-07-11 showed -49MB on
                                           #  heavy SPAs, ZERO cost on light pages + validated 0% uncovered scroll)
 export WEBKIT_EGL_PIXEL_LAYOUT=RGB565      # 16bpp tiles/framebuffer: ~halves GPU/tile memory + bandwidth
-export WEBKIT_NICOSIA_PAINTING_THREADS=1   # don't oversubscribe the 2 cores (Cairo/Nicosia raster)
+export WEBKIT_NICOSIA_PAINTING_THREADS=2   # use BOTH cores for Cairo/Nicosia tile raster. Measured: a
+                                           # scroll recenter's render+readback maxStall dropped 674->495ms
+                                           # (-27%) — the recenter re-paints the whole 3072px tall buffer and
+                                           # that paint was the dominant, single-threaded half. The 2nd core is
+                                           # otherwise idle while BS blocks on the GPU readback, so it overlaps
+                                           # cleanly (readback ticks up only ~50ms from contention; net win).
 export MALLOC_ARENA_MAX=2                  # cap glibc per-thread arenas (GStreamer/fontconfig side)
 export BPWPE_NO_STRIP=1                    # DISABLE the P2 scroll-strip readback — correct for the TALL pan
                                            # buffer (default mult=4): on a fling the recenter always jumps
