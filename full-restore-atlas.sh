@@ -76,6 +76,13 @@ else echo "  WARN: libgstqcamsrc.so missing (camera won't enumerate) — build i
 # media-server captureV3 recording to clock it (hw:0 capture alone = silence). Built in mic/build.sh.
 if [ -f "$ENV/mic/libgstqmicsrc.so" ]; then cp -f "$ENV/mic/libgstqmicsrc.so" "$D/lib/gstreamer-1.0/libgstqmicsrc.so";
 else echo "  WARN: libgstqmicsrc.so missing (mic won't enumerate) — run mic/build.sh"; fi
+# PulseAudio playback sink (atlaspasink, RANK_PRIMARY+20) — routes WebRTC/<audio> PLAYBACK through the ABI-stable
+# pa_simple API to the system PulseAudio -> audiod -> speaker. WITHOUT it autoaudiosink falls back to alsasink ->
+# ALSA 'default' -> the missing atlas pulse plugin -> "Could not open audio device" => received audio is MUTED
+# (WebRTC far end inaudible; <audio>/speechSynthesis silent). Uses the SYSTEM libpulse stack on-device (same
+# md5 as rootfs; reached via the wrapper's LD_LIBRARY_PATH=/usr/lib) — nothing else to ship. Built by build-gst-pasink.sh.
+if [ -f "$WPE/build/gst-pasink/libgstatlaspasink.so" ]; then cp -f "$WPE/build/gst-pasink/libgstatlaspasink.so" "$D/lib/gstreamer-1.0/libgstatlaspasink.so";
+else echo "  WARN: libgstatlaspasink.so missing (received audio will be MUTED) — run build-gst-pasink.sh"; fi
 
 echo "=== 5. libexec (WebProcess/NetworkProcess + gst scanner) ==="
 cp -rL "$S/libexec/." "$D/libexec/"
