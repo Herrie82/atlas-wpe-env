@@ -2,3 +2,5 @@ qmicd
 libgstqmicsrc.so
 qmicd_testclient
 *.o
+qmicd_amp
+wm8994_i2c
