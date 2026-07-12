@@ -71,6 +71,19 @@ static int read_all(int fd, void *buf, size_t n) {
     return 1;
 }
 
+/* Route the WM8994 DAC1 to the SPEAKER output. webOS audiod does this when IT plays, but our (non-audiod)
+ * PulseAudio stream doesn't trigger that policy, so DAC1 lands on the silent headphone path and playback is
+ * inaudible even though pcm0p is RUNNING. Force the speaker route on (control NAMES — numids shift across
+ * boots). root, so amixer can set it. Verified on-device: switches held under audiod during playback. */
+static void enable_speaker(void) {
+    system("for c in 'SPKL DAC1 Switch' 'SPKR DAC1 Switch' 'SPKL Output Switch' 'SPKR Output Switch'; do "
+           "amixer -c 0 cset name=\"$c\" on >/dev/null 2>&1; done; "
+           "amixer -c 0 cset name='SPKL DAC1 Volume' 1 >/dev/null 2>&1; "
+           "amixer -c 0 cset name='SPKR DAC1 Volume' 1 >/dev/null 2>&1; "
+           "amixer -c 0 cset name='SPKL Output Volume' 63 >/dev/null 2>&1; "
+           "amixer -c 0 cset name='SPKR Output Volume' 63 >/dev/null 2>&1");
+}
+
 /* Serve one connected client until it disconnects. */
 static void serve(int cfd) {
     struct qspk_hdr h;
@@ -91,6 +104,7 @@ static void serve(int cfd) {
     pa_simple *pa = p_new(NULL, "AtlasBrowser", PA_STREAM_PLAYBACK, NULL, "webkit",
                           &ss, NULL, NULL, &err);
     if (!pa) { fprintf(stderr, "qspkd: pa_simple_new failed (err=%d)\n", err); return; }
+    enable_speaker();   /* route DAC1 -> speaker (audiod won't for our stream) */
     fprintf(stderr, "qspkd: playing %uch %uHz fmt=%u\n", h.channels, h.rate, h.format);
 
     static char buf[8192];
