@@ -81,8 +81,12 @@ else echo "  WARN: libgstqmicsrc.so missing (mic won't enumerate) — run mic/bu
 # ALSA 'default' -> the missing atlas pulse plugin -> "Could not open audio device" => received audio is MUTED
 # (WebRTC far end inaudible; <audio>/speechSynthesis silent). Uses the SYSTEM libpulse stack on-device (same
 # md5 as rootfs; reached via the wrapper's LD_LIBRARY_PATH=/usr/lib) — nothing else to ship. Built by build-gst-pasink.sh.
-if [ -f "$WPE/build/gst-pasink/libgstatlaspasink.so" ]; then cp -f "$WPE/build/gst-pasink/libgstatlaspasink.so" "$D/lib/gstreamer-1.0/libgstatlaspasink.so";
-else echo "  WARN: libgstatlaspasink.so missing (received audio will be MUTED) — run build-gst-pasink.sh"; fi
+# DISABLED 2026-07-12: the prebuilt libgstatlaspasink.so links the SYSTEM libpulse (built for the old webOS
+# glibc); loading it into the atlas glibc-2.52 WebProcess SIGSEGVs during the gst plugin scan -> the browser
+# hangs mid-load. Do NOT deploy until libpulse (client) is rebuilt for the atlas glibc and atlaspasink is
+# relinked against it (or replaced by a system-glibc speaker helper daemon, cf. qmicd/qcamd). Received audio
+# stays muted until then. Re-enable this line once the atlas-built libpulse lands.
+# if [ -f "$WPE/build/gst-pasink/libgstatlaspasink.so" ]; then cp -f "$WPE/build/gst-pasink/libgstatlaspasink.so" "$D/lib/gstreamer-1.0/libgstatlaspasink.so"; fi
 
 echo "=== 5. libexec (WebProcess/NetworkProcess + gst scanner) ==="
 cp -rL "$S/libexec/." "$D/libexec/"
