@@ -95,6 +95,16 @@ echo "=== 6. share/ (pruned) ==="
 for sd in glib-2.0 mime dbus-1 gstreamer-1.0 p11-kit icu themes locale/en alsa; do  # alsa: alsa.conf+cards/pcm — libasound needs it or mic/speaker enumerate 0 devices (WebRTC "Local Preview only")
   [ -e "$S/share/$sd" ] && { mkdir -p "$D/share/$(dirname "$sd")"; cp -rL "$S/share/$sd" "$D/share/$sd"; } || true
 done
+# mime DATABASE (GIO content-type): staging ships share/mime with NO mime.cache, so GIO can't map .html->text/html
+# and WebKit DOWNLOADS local file:// pages instead of rendering them. Generate a real mime.cache from the host's
+# freedesktop.org.xml (mime.cache is little-endian data = arch-independent for this ARM target). Regression from
+# the reinstall that dropped it (cf. the alsa/qcam/qmic omissions).
+if command -v update-mime-database >/dev/null 2>&1 && [ -f /usr/share/mime/packages/freedesktop.org.xml ]; then
+  MB=$(mktemp -d); mkdir -p "$MB/packages"; cp /usr/share/mime/packages/freedesktop.org.xml "$MB/packages/"
+  update-mime-database "$MB" >/dev/null 2>&1
+  mkdir -p "$D/share/mime"; cp -rf "$MB/." "$D/share/mime/"; rm -rf "$MB"
+  [ -f "$D/share/mime/mime.cache" ] && echo "  mime.cache OK" || echo "  WARN: mime.cache gen failed -> file:// html will DOWNLOAD"
+else echo "  WARN: update-mime-database/freedesktop.org.xml missing -> file:// html will DOWNLOAD not render"; fi
 
 echo "=== 7. engine data files (fonts.conf, gstomx.conf) ==="
 cp -f "$WPE/ipk-build/pull/fonts.conf" "$D/fonts.conf"
@@ -107,7 +117,12 @@ cp -f "$CAM/qcamd" "$A/qcamd"                                          # runs un
 cp -f "$ENV/mic/qmicd" "$A/qmicd"                                      # ATLAS glibc-2.52 (ld-linux+rpath baked); the wrapper
                                                                       # starts it AFTER the atlas LD_LIBRARY_PATH export. MUST
                                                                       # run from $A/qmicd (== its ls2 role exeName) or ls-hubd denies it.
-chmod +x "$A/BrowserServer" "$A/qcamd" "$A/qmicd" "$D/BrowserServer-atlas"
+# Speaker daemon: received-audio PLAYBACK (WebRTC far end, <audio>, speechSynthesis). SYSTEM glibc; dlopen's the
+# system libpulse. WITHOUT it (and its gst sink below) autoaudiosink falls back to alsasink -> broken pulse plugin
+# -> received audio MUTED. Built by spk/build.sh. Started by the wrapper before the atlas LD_LIBRARY_PATH.
+if [ -f "$ENV/spk/qspkd" ]; then cp -f "$ENV/spk/qspkd" "$A/qspkd"; else echo "  WARN: qspkd missing (received audio MUTED) — run spk/build.sh"; fi
+if [ -f "$ENV/spk/libgstatlasqspksink.so" ]; then cp -f "$ENV/spk/libgstatlasqspksink.so" "$D/lib/gstreamer-1.0/libgstatlasqspksink.so"; else echo "  WARN: atlasqspksink missing"; fi
+chmod +x "$A/BrowserServer" "$A/qcamd" "$A/qmicd" "$A/qspkd" "$D/BrowserServer-atlas" 2>/dev/null
 # LunaService role files — activate installs them into rootfs ls2 roles. WITHOUT the role startService()/
 # LSRegister fails ('Invalid permissions for org.webosports.<svc>'): BS exits 255; qmicd can't record.
 mkdir -p "$APP/deviceroot/ls2-roles"; cp -f "$ROLESRC" "$APP/deviceroot/ls2-roles/"
