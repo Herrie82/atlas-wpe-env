@@ -54,11 +54,13 @@ export JSC_forceRAMSize=201326592         # bias JS heaps to a ~192MB budget -> 
 export WEBKIT_EGL_PIXEL_LAYOUT=RGB565      # 16bpp tiles/framebuffer: ~halves GPU/tile memory + bandwidth
 export WEBKIT_NICOSIA_PAINTING_THREADS=1   # don't oversubscribe the 2 cores (Cairo/Nicosia raster)
 export MALLOC_ARENA_MAX=2                  # cap glibc per-thread arenas (GStreamer/fontconfig side)
-export BPWPE_NO_STRIP=1                     # DISABLE P2 strip-readback on recenter. A/B (2026-07-11, tall
-                                           # Wikipedia fling): strip ON = 53% uncovered/1432ms vs OFF = 26%/730ms.
-                                           # recenter always jumps ~slack/2 (delta ~960-1400px), so the "strip"
-                                           # is ~1/3-1/2 the buffer read via the slow sub-rect path + a ~30MB
-                                           # memmove -> loses to one full-buffer EGL lock_surface readback.
+export BPWPE_NO_STRIP=1                    # DISABLE the P2 scroll-strip readback — correct for the TALL pan
+                                           # buffer (default mult=4): on a fling the recenter always jumps
+                                           # ~slack/2 (delta ~960-1400px), so the "strip" is ~1/3-1/2 the
+                                           # buffer read via the slow sub-rect path + a ~30MB memmove ->
+                                           # LOSES to one full-buffer EGL lock_surface readback. A/B (Wikipedia
+                                           # fling): strip OFF = 26% uncovered/730ms vs ON = 53%/1432ms. The
+                                           # strip only wins for viewport-sized rendering (small deltas).
 ulimit -c unlimited
 cd $ATLAS
 rm -f /tmp/yapserver.atlas*
