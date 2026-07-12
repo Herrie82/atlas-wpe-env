@@ -66,6 +66,14 @@ export BPWPE_NO_STRIP=1                    # DISABLE the P2 scroll-strip readbac
                                            # LOSES to one full-buffer EGL lock_surface readback. A/B (Wikipedia
                                            # fling): strip OFF = 26% uncovered/730ms vs ON = 53%/1432ms. The
                                            # strip only wins for viewport-sized rendering (small deltas).
+export BPWPE_SETTLE_VEL=1200               # px/s: a fast flick whose scroll OUTRUNS the buffer above this
+                                           # velocity DEFERS to one settle render instead of chaining renders.
+                                           # Measured a real flick: the momentum coast runs ~1200-2400 px/s;
+                                           # the code default 1500 left the ~1200-1500 coast tail rendering (a
+                                           # multi-render grind), so 1200 catches the tail. The inBuffer pan
+                                           # check runs BEFORE this gate, so deliberate reading-speed scrolling
+                                           # is unaffected — only buffer-outrunning flicks defer. Lower=more
+                                           # deferring (blank-then-settle), raise if slow scrolls feel blanky.
 ulimit -c unlimited
 cd $ATLAS
 rm -f /tmp/yapserver.atlas*
