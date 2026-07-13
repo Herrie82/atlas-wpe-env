@@ -23,6 +23,14 @@ ATLAS=$(cd "$(dirname "$0")" && pwd); DR=$(cd "$ATLAS/.." && pwd); D=$DR/wpe-252
 if [ -x "$ATLAS/qcamd" ] && ! ps -ef 2>/dev/null | grep -q '[q]camd'; then
     "$ATLAS/qcamd" >/tmp/qcamd.log 2>&1 &
 fi
+# Speaker daemon (received-audio playback bridge, $ATLAS/qspkd) — the output analog of qcamd/qmicd. The atlas
+# WebProcess can't load the device libpulse (SIGSEGV), so the in-browser gst sink atlasqspksink streams PCM to
+# /tmp/qspkd.sock and THIS daemon (SYSTEM glibc; dlopen's system libpulse-simple) plays it via PulseAudio ->
+# audiod -> speaker. Same reason as qcamd: start it HERE under the clean upstart env, BEFORE the atlas
+# LD_LIBRARY_PATH (so it resolves the SYSTEM libpulse, not atlas libs). Cheap: opens pulse only on a connect.
+if [ -x "$ATLAS/qspkd" ] && ! ps -ef 2>/dev/null | grep -q '[q]spkd'; then
+    "$ATLAS/qspkd" >/tmp/qspkd.log 2>&1 &
+fi
 cp -f $D/lib/libWPEBackend-atlas.so $D/lib/libWPEBackend-default.so 2>/dev/null
 export BPWPE_DEBUG=1
 # Do NOT put the atlas $D/lib (glibc-2.52 + ld-linux.so.3) on LD_LIBRARY_PATH: it is INHERITED by the

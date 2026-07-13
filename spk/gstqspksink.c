@@ -168,6 +168,24 @@ static void gst_qspk_sink_init(GstQspkSink *self)
     self->rate = 0;
     g_mutex_init(&self->lock);
     g_atomic_int_set(&self->flushing, 0);
+
+    /* Atlas/TouchPad: received WebRTC audio reaches us with jittery per-buffer PTS (the mediastream
+     * appsrc re-timestamps at main-thread arrival time). A clock-syncing audio sink reacts to that
+     * jitter by inserting silence to realign each buffer -> audible beep/silence stutter. We don't
+     * need clock sync: qspkd does a BLOCKING pa_simple_write, so the socket backpressures us and the
+     * ring buffer paces playback at the true audio rate (exactly like the standalone tone client,
+     * which played perfectly smooth). Disable sync so buffers stream back-to-back into the ring
+     * buffer with no realignment gaps. async=FALSE avoids preroll latency on this live path. */
+    gst_base_sink_set_sync(GST_BASE_SINK(self), FALSE);
+    gst_base_sink_set_async_enabled(GST_BASE_SINK(self), FALSE);
+
+    /* Atlas/TouchPad: the received-audio buffers reach us in ~900ms bursts (the WebProcess main
+     * thread batches the callOnMainThread audio dispatch), so a normal ~200ms ring buffer underruns
+     * between bursts and the base sink writes SILENCE to fill it -> audible beep/silence + a growing
+     * backlog. Enlarge the ring buffer to ~1.5s so it bridges a whole burst gap without underrunning:
+     * a burst tops it up, it drains to qspkd at the real 48kHz rate, and the next burst arrives before
+     * it empties. buffer-time/latency-time are microseconds. */
+    g_object_set(self, "buffer-time", (gint64)1500000, "latency-time", (gint64)50000, NULL);
 }
 
 static gboolean plugin_init(GstPlugin *plugin)
