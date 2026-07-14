@@ -12,6 +12,19 @@ case "$*" in *offscreen*) exit 0 ;; esac
 [ -w /proc/sys/kernel/minicore_timeout ] && echo 5 > /proc/sys/kernel/minicore_timeout 2>/dev/null
 i=0; while [ $i -lt 90 ] && ! ps -ef 2>/dev/null | grep -q '[L]unaSysMgr'; do sleep 1; i=$((i+1)); done
 sleep 3
+# ORPHAN-WEBPROCESS REAP (2026-07-14): when BS-atlas dies UNCLEANLY (SIGSEGV/SIGKILL — confirmed via
+# dmesg "minicore_launch: CRASH! BrowserServer-a(<pid>) received 11"), ~BrowserPageWPE never runs, so
+# webkit_web_view_terminate_web_process() is skipped and every card's WPEWebProcess (tens of MB each) is
+# reparented to init (PPid 1) and lingers FOREVER. They pile up across crashes until webOS OOMs new cards
+# -> "1 card visible but N stale WPEWebProcess", blank/spinning launches, page-won't-load. The upstart job
+# respawns THIS wrapper only after the old BS has exited, so at this point the fresh BS owns no WebProcess
+# yet -> any WPEWebProcess still parented to init is a guaranteed orphan from the dead BS. Reap them here
+# (clean upstart env, before the atlas LD_LIBRARY_PATH export -> busybox pgrep/awk/kill are safe). Uses
+# /proc/PID/status PPid (immune to comm-with-spaces), so it never touches a live child of the new BS.
+for _wp in $(pgrep WPEWebProcess 2>/dev/null); do
+    _pp=$(awk '/^PPid:/{print $2}' /proc/$_wp/status 2>/dev/null)
+    if [ "$_pp" = "1" ]; then kill -9 "$_wp" 2>/dev/null; fi
+done
 mount -o remount,size=131072k /dev 2>/dev/null
 unset LD_PRELOAD
 # Derive our own location so the engine root moves with the app (this wrapper lives at $DR/atlas/BrowserServer).
@@ -112,4 +125,4 @@ export WEBKIT_INJECTED_BUNDLE_PATH=$D/lib/wpe-webkit-2.0/injected-bundle
 # via core: YapServerDeadlockPriv::deadlockThreadTimerCallback -> abort). A slow GC recovers in
 # well under 45s, so raise the timeout so BS survives the stall instead of crash+respawn; a genuine
 # deadlock is still caught, just later. Tune via -d / DeadlockTimeoutMs setting (-1 = disabled).
-exec $D/BrowserServer-atlas -platform Minimal -d 45000 >/tmp/bs-atlas.log 2>&1
+exec $D/BrowserServer-atlas -platform Minimal -d 600000 >>/media/ram/bs-atlas.log 2>&1
