@@ -43,6 +43,19 @@ SH
 novacom put file://$DEV/lib/libWPEWebKit-2.0.so.1 < "$TMP" && echo "deployed lib"
 rm -f "$TMP"
 
+# The injected bundle runs INSIDE the WebProcess and is compiled against WebKit's structs. It MUST be kept in
+# lock-step with libWPEWebKit or ABI drift corrupts the WebProcess (e.g. an IPC struct like
+# WebPageCreationParameters gaining a field under ENABLE(APPLICATION_MANIFEST) -> readyReadHandler memcpy SIGBUS).
+# This step was historically MISSING, silently leaving an 8-day-stale bundle on device. No prefix-patch needed
+# (0 staging-path refs; it resolves libWPEWebKit from the already-loaded process image).
+BUNDLE_HOST="$B/lib/libWPEInjectedBundle.so"
+BUNDLE_DEV="$DEV/lib/wpe-webkit-2.0/injected-bundle/libWPEInjectedBundle.so"
+if [ -f "$BUNDLE_HOST" ]; then
+  novacom put file://"$BUNDLE_DEV" < "$BUNDLE_HOST" && echo "deployed injected bundle ($(stat -c%s "$BUNDLE_HOST") bytes)"
+else
+  echo "  WARN: injected bundle not found at $BUNDLE_HOST"
+fi
+
 echo "=== restart atlas ==="
 cat <<'SH' | novacom run file://bin/sh
 rm -f /tmp/bpwpe.log /tmp/bs-atlas.log
