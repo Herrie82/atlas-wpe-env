@@ -46,6 +46,9 @@ rm -f "$TMP"
 echo "=== restart atlas ==="
 cat <<'SH' | novacom run file://bin/sh
 rm -f /tmp/bpwpe.log /tmp/bs-atlas.log
+# Clear the cached GStreamer registry so any added/changed gst plugins (ogg/vorbis/opus, webrtc, etc.) get
+# rescanned + registered. Without this a plain redeploy keeps the stale /tmp cache and new codecs never appear.
+rm -f /tmp/atlas-gstreg.bin
 start atlas 2>/dev/null; sleep 5
 i=0; while [ $i -lt 25 ] && [ ! -S /tmp/yapserver.atlas ]; do sleep 1; i=$((i+1)); done
 echo "socket up after $((i+5))s; BS=$(ps -ef|grep BrowserServer-atlas|grep -v grep|wc -l)"

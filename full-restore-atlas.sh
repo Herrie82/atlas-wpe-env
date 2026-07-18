@@ -52,6 +52,17 @@ done
 # 2b. plugin/module subdirs are single real files — keep their names (-L in case any are symlinked)
 for sub in gstreamer-1.0 gio wpe-webkit-2.0; do [ -d "$S/lib/$sub" ] && cp -rL "$S/lib/$sub" "$D/lib/"; done
 find "$D/lib" \( -name '*.a' -o -name '*.la' \) -delete 2>/dev/null || true
+# 2c. AUDIO CODEC plugins guard — <audio>/WebRTC decode routes through these GStreamer element plugins.
+# They come along via the 2b whole-dir copy ONLY IF present in staging; libgstogg.so (oggdemux) + libgstvorbis.so
+# (vorbisdec) were built late (gst-plugins-base _bopus, -Dogg/-Dvorbis=enabled) and are easy to miss on a lean
+# staging. Without oggdemux NO Ogg container decodes at all (not even Ogg-Opus). Underlying libogg.so.0/
+# libvorbis.so.0/libvorbisenc.so.2/libopus.so.0 ride along via step 2a (real staging .so files). Fail LOUD.
+for p in libgstogg.so libgstvorbis.so libgstopus.so; do
+  if [ ! -f "$D/lib/gstreamer-1.0/$p" ]; then
+    if [ -f "$S/lib/gstreamer-1.0/$p" ]; then cp -f "$S/lib/gstreamer-1.0/$p" "$D/lib/gstreamer-1.0/$p";
+    else echo "  WARN: $p missing from staging (no Ogg/Vorbis/Opus decode) — build via gst-plugins-base _bopus -Dogg/-Dvorbis/-Dopus=enabled"; fi
+  fi
+done
 
 echo "=== 3. glibc-2.23 + gcc runtime ==="
 for l in ld-linux.so.3 libc.so.6 libm.so.6 libpthread.so.0 libdl.so.2 librt.so.1 libresolv.so.2 \
