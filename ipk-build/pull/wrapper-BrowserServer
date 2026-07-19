@@ -101,7 +101,10 @@ rm -f /tmp/yapserver.atlas*
 export GST_PLUGIN_SYSTEM_PATH=$D/lib/gstreamer-1.0
 export GST_OMX_CONFIG_DIR=$D
 export GST_PLUGIN_SCANNER=$D/libexec/gstreamer-1.0/gst-plugin-scanner
-export GST_REGISTRY=/tmp/atlas-gstreg.bin
+# Persist the gst plugin registry in cryptofs (NOT /tmp, which is wiped on every reboot -> full plugin
+# rescan on the first browse after each boot, ~1-3s). GStreamer auto-invalidates entries whose plugin
+# .so mtime changed, so a persistent registry stays correct across engine/codec redeploys.
+export GST_REGISTRY=$D/atlas-gstreg.bin
 export GST_DEBUG=2,webkitregistryscanner:6,omxvideodec:4
 # Build the gst plugin registry IN-PROCESS (no forked gst-plugin-scanner). The external scanner helper
 # SIGSEGVs when it runs (its baked rpath pointed at a host staging dir; even patched it crashes during

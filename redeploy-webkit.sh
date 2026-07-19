@@ -6,6 +6,9 @@
 #   Usage: ./redeploy-webkit.sh          (build + deploy + restart)
 #          NOBUILD=1 ./redeploy-webkit.sh  (skip ninja, just re-deploy the existing lib)
 set -e
+# Capture the deploy-strip flag BEFORE sourcing the env — the toolchain env exports STRIP=<strip-binary>
+# (autotools convention), which would clobber a command-line STRIP=1. DOSTRIP holds our intent.
+DOSTRIP="${STRIP:-0}"
 WPE=/home/herrie/webos/wpe
 . "${WPE_ENV:-$WPE/env-glibc-gcc125.sh}"
 B="$WPE/build/wpewebkit-2.52.4/_b"
@@ -21,6 +24,13 @@ fi
 echo "=== prefix-patch a copy (host staging -> /var/atlas252) ==="
 TMP=$(mktemp /tmp/libwpe.XXXX.so)
 cp -f "$B/$LIB" "$TMP"
+# STRIP=1: ship the stripped lib (104MB -> ~67MB) — smaller mmap/relocation => faster cold WebProcess spawn.
+# Default off so the on-device lib keeps symbols for gdb/core debugging (the baked staging-path string that
+# the prefix-patch below rewrites survives --strip-unneeded, verified).
+if [ "$DOSTRIP" = "1" ]; then
+  "$STRIP" --strip-unneeded "$TMP"
+  echo "  stripped deploy copy -> $(stat -c%s "$TMP") bytes"
+fi
 python3 - "$TMP" <<'PY'
 import sys
 host=b'/home/herrie/webos/wpe/staging-glibc-252'
@@ -60,8 +70,10 @@ echo "=== restart atlas ==="
 cat <<'SH' | novacom run file://bin/sh
 rm -f /tmp/bpwpe.log /tmp/bs-atlas.log
 # Clear the cached GStreamer registry so any added/changed gst plugins (ogg/vorbis/opus, webrtc, etc.) get
-# rescanned + registered. Without this a plain redeploy keeps the stale /tmp cache and new codecs never appear.
+# rescanned + registered. The registry now lives in cryptofs ($DEV/atlas-gstreg.bin, persistent across
+# reboots) instead of /tmp — clear both so a redeploy always forces a clean rescan.
 rm -f /tmp/atlas-gstreg.bin
+rm -f /media/cryptofs/apps/usr/palm/applications/org.webosports.app.atlas/deviceroot/wpe-252/atlas-gstreg.bin
 start atlas 2>/dev/null; sleep 5
 i=0; while [ $i -lt 25 ] && [ ! -S /tmp/yapserver.atlas ]; do sleep 1; i=$((i+1)); done
 echo "socket up after $((i+5))s; BS=$(ps -ef|grep BrowserServer-atlas|grep -v grep|wc -l)"
