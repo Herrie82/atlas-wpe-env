@@ -43,6 +43,20 @@ copy_soname(){ local f="$1" son
   [ -z "$son" ] && son=$(basename "$f")
   cp -f "$f" "$D/lib/$son"
 }
+# 2z. REFRESH build outputs into staging so the assembly is NEVER stale. Staging deps (woff2/flite/enchant/
+# webrtc/ogg/vorbis/opus/audioparsers/mpegts) are kept current there, but libWPEWebKit + the injected bundle +
+# the WebProcess stubs come from the _b build dir and staging drifts behind every rebuild. Pull them fresh.
+WPEBUILD="$WPE/build/wpewebkit-2.52.4/_b"
+if [ -f "$WPEBUILD/lib/libWPEWebKit-2.0.so.1.9.8" ]; then
+  cp -f "$WPEBUILD/lib/libWPEWebKit-2.0.so.1.9.8" "$S/lib/libWPEWebKit-2.0.so.1.9.8"
+  mkdir -p "$S/lib/wpe-webkit-2.0/injected-bundle"
+  cp -f "$WPEBUILD/lib/libWPEInjectedBundle.so" "$S/lib/wpe-webkit-2.0/injected-bundle/libWPEInjectedBundle.so"
+  mkdir -p "$S/libexec/wpe-webkit-2.0"
+  cp -f "$WPEBUILD/bin/WPEWebProcess" "$WPEBUILD/bin/WPENetworkProcess" "$S/libexec/wpe-webkit-2.0/" 2>/dev/null || true
+  echo "=== 2z. refreshed libWPEWebKit + injected bundle + WebProcess from the _b build ==="
+else
+  echo "  WARN: _b build not found ($WPEBUILD) — assembly uses whatever libWPEWebKit is in staging (MAY BE STALE)"
+fi
 # 2a. top-level libs: skip symlinks (real files only), skip legacy WPE 1.0 API + EGL stubs (device provides EGL)
 for f in "$S"/lib/*.so*; do
   [ -L "$f" ] && continue
@@ -57,10 +71,14 @@ find "$D/lib" \( -name '*.a' -o -name '*.la' \) -delete 2>/dev/null || true
 # (vorbisdec) were built late (gst-plugins-base _bopus, -Dogg/-Dvorbis=enabled) and are easy to miss on a lean
 # staging. Without oggdemux NO Ogg container decodes at all (not even Ogg-Opus). Underlying libogg.so.0/
 # libvorbis.so.0/libvorbisenc.so.2/libopus.so.0 ride along via step 2a (real staging .so files). Fail LOUD.
-for p in libgstogg.so libgstvorbis.so libgstopus.so; do
+# Session-added audio/container plugins that were built into separate dirs (not gst-plugins-base): ogg/vorbis/opus
+# (gst-plugins-base _bopus), audioparsers=aacparse (gst-plugins-good, bumps AAC confidence + raw ADTS), and the
+# MPEG-TS demux (gst-plugins-bad, USE_GSTREAMER_MPEGTS — AAC-in-TS). All must be pre-copied into staging's
+# gstreamer-1.0/ (done manually when built) so the 2b whole-copy carries them; guard + WARN if any went missing.
+for p in libgstogg.so libgstvorbis.so libgstopus.so libgstaudioparsers.so libgstmpegtsdemux.so; do
   if [ ! -f "$D/lib/gstreamer-1.0/$p" ]; then
     if [ -f "$S/lib/gstreamer-1.0/$p" ]; then cp -f "$S/lib/gstreamer-1.0/$p" "$D/lib/gstreamer-1.0/$p";
-    else echo "  WARN: $p missing from staging (no Ogg/Vorbis/Opus decode) — build via gst-plugins-base _bopus -Dogg/-Dvorbis/-Dopus=enabled"; fi
+    else echo "  WARN: $p missing from staging — codec/container decode degraded (copy the built plugin into $S/lib/gstreamer-1.0/)"; fi
   fi
 done
 
