@@ -33,6 +33,8 @@
 #include <hal/hal_device.h>
 #include <hal/hal_sensor_acceleration.h>
 #include <hal/hal_sensor_angular_velocity.h>
+#include <hal/hal_sensor_magnetic_field.h>
+#include <hal/hal_sensor_linear_acceleration.h>
 
 #define SOCK_PATH   "/tmp/atlas_sensord.sock"
 #define MAX_CLIENTS 4
@@ -96,6 +98,32 @@ static void drain_gyro(hal_device_handle_t h, float *x, float *y, float *z)
     }
 }
 
+static void drain_mag(hal_device_handle_t h, float *x, float *y, float *z)   /* magnetometer, micro-Tesla (int) */
+{
+    hal_event_handle_t ev = 0;
+    hal_sensor_magnetic_field_event_item_t item;
+    while (h && hal_device_get_event(h, &ev) == HAL_ERROR_SUCCESS && ev) {
+        if (hal_sensor_magnetic_field_event_get_item(ev, &item) == HAL_ERROR_SUCCESS) {
+            *x = (float)item.x; *y = (float)item.y; *z = (float)item.z;
+        }
+        hal_device_release_event(h, ev);
+        ev = 0;
+    }
+}
+
+static void drain_lin(hal_device_handle_t h, float *x, float *y, float *z)   /* linear acceleration, m/s^2 (gravity removed) */
+{
+    hal_event_handle_t ev = 0;
+    hal_sensor_linear_acceleration_event_item_t item;
+    while (h && hal_device_get_event(h, &ev) == HAL_ERROR_SUCCESS && ev) {
+        if (hal_sensor_linear_acceleration_event_get_item(ev, &item) == HAL_ERROR_SUCCESS) {
+            *x = item.x; *y = item.y; *z = item.z;
+        }
+        hal_device_release_event(h, ev);
+        ev = 0;
+    }
+}
+
 int main(int argc, char **argv)
 {
     if (argc > 1 && strcmp(argv[1], "-v") == 0) g_verbose = 1;
@@ -103,9 +131,13 @@ int main(int argc, char **argv)
 
     hal_device_handle_t hAccel = open_sensor(HAL_DEVICE_SENSOR_ACCELERATION, "acceleration");
     hal_device_handle_t hGyro  = open_sensor(HAL_DEVICE_SENSOR_ANGULAR_VELOCITY, "angular_velocity");
+    hal_device_handle_t hMag   = open_sensor(HAL_DEVICE_SENSOR_MAGNETIC_FIELD, "magnetic_field");
+    hal_device_handle_t hLin   = open_sensor(HAL_DEVICE_SENSOR_LINEAR_ACCELERATION, "linear_acceleration");
     if (!hAccel) { fprintf(stderr, "sensord: no accelerometer — fatal\n"); return 1; }
     int fdAccel = sensor_fd(hAccel);
-    int fdGyro  = sensor_fd(hGyro);   /* gyro optional (TouchPad has none? still works with accel-only) */
+    int fdGyro  = sensor_fd(hGyro);   /* all but accel are optional — a missing sensor just leaves its axes 0 */
+    int fdMag   = sensor_fd(hMag);
+    int fdLin   = sensor_fd(hLin);
 
     /* Unix listening socket */
     unlink(SOCK_PATH);
@@ -118,14 +150,16 @@ int main(int argc, char **argv)
     if (g_verbose) fprintf(stderr, "sensord: listening on %s (accelFd=%d gyroFd=%d)\n", SOCK_PATH, fdAccel, fdGyro);
 
     int clients[MAX_CLIENTS]; int nclient = 0;
-    float ax=0,ay=0,az=0, gx=0,gy=0,gz=0;
+    float ax=0,ay=0,az=0, gx=0,gy=0,gz=0, mx=0,my=0,mz=0, lx=0,ly=0,lz=0;
 
     while (g_run) {
-        struct pollfd pfd[3 + MAX_CLIENTS]; int n = 0;
+        struct pollfd pfd[5 + MAX_CLIENTS]; int n = 0;
         int iSrv = n; pfd[n].fd = srv; pfd[n].events = POLLIN; n++;
-        int iAcc = -1, iGyr = -1;
+        int iAcc = -1, iGyr = -1, iMag = -1, iLin = -1;
         if (fdAccel >= 0) { iAcc = n; pfd[n].fd = fdAccel; pfd[n].events = POLLIN; n++; }
         if (fdGyro  >= 0) { iGyr = n; pfd[n].fd = fdGyro;  pfd[n].events = POLLIN; n++; }
+        if (fdMag   >= 0) { iMag = n; pfd[n].fd = fdMag;   pfd[n].events = POLLIN; n++; }
+        if (fdLin   >= 0) { iLin = n; pfd[n].fd = fdLin;   pfd[n].events = POLLIN; n++; }
         for (int i = 0; i < nclient; i++) { pfd[n].fd = clients[i]; pfd[n].events = 0; n++; }
 
         int r = poll(pfd, n, 1000);
@@ -146,10 +180,15 @@ int main(int argc, char **argv)
         int updated = 0;
         if (iAcc >= 0 && (pfd[iAcc].revents & POLLIN)) { drain_accel(hAccel, &ax, &ay, &az); updated = 1; }
         if (iGyr >= 0 && (pfd[iGyr].revents & POLLIN)) { drain_gyro(hGyro, &gx, &gy, &gz); updated = 1; }
+        if (iMag >= 0 && (pfd[iMag].revents & POLLIN)) { drain_mag(hMag, &mx, &my, &mz); updated = 1; }
+        if (iLin >= 0 && (pfd[iLin].revents & POLLIN)) { drain_lin(hLin, &lx, &ly, &lz); updated = 1; }
 
         if (updated) {
-            char line[160];
-            int len = snprintf(line, sizeof line, "S %.4f %.4f %.4f %.5f %.5f %.5f\n", ax, ay, az, gx, gy, gz);
+            char line[256];
+            /* S ax ay az gx gy gz mx my mz lx ly lz  (accel g, gyro rad/s, mag uT, linear m/s^2) */
+            int len = snprintf(line, sizeof line,
+                "S %.4f %.4f %.4f %.5f %.5f %.5f %.1f %.1f %.1f %.4f %.4f %.4f\n",
+                ax, ay, az, gx, gy, gz, mx, my, mz, lx, ly, lz);
             if (g_verbose) fputs(line, stdout), fflush(stdout);
             for (int i = 0; i < nclient; ) {
                 if (write(clients[i], line, len) < 0 && (errno == EPIPE || errno == ECONNRESET)) {
@@ -163,5 +202,7 @@ int main(int argc, char **argv)
     close(srv); unlink(SOCK_PATH);
     if (hAccel) hal_device_close(hAccel);
     if (hGyro)  hal_device_close(hGyro);
+    if (hMag)   hal_device_close(hMag);
+    if (hLin)   hal_device_close(hLin);
     return 0;
 }
