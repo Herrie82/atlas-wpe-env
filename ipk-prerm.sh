@@ -5,11 +5,14 @@ log() { echo "atlas-prerm: $*"; }
 log "stopping engine..."
 stop atlas 2>/dev/null
 killall BrowserServer-atlas 2>/dev/null
+stop atlas-sensord 2>/dev/null
+killall atlas-sensord 2>/dev/null
 
 log "removing rootfs components (rw)..."
 mount -o remount,rw / 2>/dev/null
 rm -f /usr/lib/BrowserPlugins/BrowserAdapterAtlas.so
 rm -f /etc/event.d/atlas
+rm -f /etc/event.d/atlas-sensord
 sync
 mount -o remount,ro / 2>/dev/null
 

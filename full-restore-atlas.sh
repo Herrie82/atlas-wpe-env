@@ -143,6 +143,7 @@ echo "=== 8. BrowserServer-atlas + atlas/ (wrapper, qcamd) ==="
 cp -f "$OBJ/BrowserServer-atlas" "$D/BrowserServer-atlas"
 cp -f "$ENV/ipk-build/pull/wrapper-BrowserServer" "$A/BrowserServer"   # upstart execs ./BrowserServer
 cp -f "$CAM/qcamd" "$A/qcamd"                                          # runs under SYSTEM glibc — do NOT patchelf/strip
+cp -f "$ENV/sensord/atlas-sensord" "$A/atlas-sensord"; chmod +x "$A/atlas-sensord"  # SYSTEM glibc (PalmPDK) HAL sensor bridge (DeviceOrientation/Motion) — do NOT patchelf/strip
 cp -f "$ENV/mic/qmicd" "$A/qmicd"                                      # ATLAS glibc-2.52 (ld-linux+rpath baked); the wrapper
                                                                       # starts it AFTER the atlas LD_LIBRARY_PATH export. MUST
                                                                       # run from $A/qmicd (== its ls2 role exeName) or ls-hubd denies it.
@@ -165,6 +166,7 @@ cp -f "$ENV/roles/org.webosports.qmicd.json" "$APP/deviceroot/ls2-roles/"
 mkdir -p "$APP/deviceroot/BrowserPlugins" "$APP/deviceroot/event.d"
 cp -f "$ENV/ipk-build/pull/BrowserAdapterAtlas.so" "$APP/deviceroot/BrowserPlugins/"
 cp -f "$ENV/ipk-build/pull/upstart-atlas"          "$APP/deviceroot/event.d/atlas"
+cp -f "$ENV/ipk-build/pull/upstart-atlas-sensord"  "$APP/deviceroot/event.d/atlas-sensord"
 
 echo "=== 8b. WebRTC-completeness guard (regression trap) ==="
 # The WebRTC stack is assembled by COPYING the whole staging gstreamer-1.0/ dir + all staging libs (steps

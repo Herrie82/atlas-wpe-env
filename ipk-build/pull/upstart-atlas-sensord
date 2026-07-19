@@ -1,0 +1,12 @@
+# atlas-sensord -- HAL accelerometer/gyro bridge for the Atlas browser's DeviceOrientation/DeviceMotion.
+# Runs under the SYSTEM glibc (it's a PalmPDK-built binary that links /usr/lib/libhal.so, which the Atlas
+# engine's private glibc-2.25 can't load). Publishes samples on /tmp/atlas_sensord.sock; BrowserPageWPE
+# connects on demand when a page adds a deviceorientation/devicemotion listener.
+start on stopped fontconfig_cache
+stop on started start_update
+description "atlas-sensord (HAL sensors -> Atlas browser)"
+
+exec /media/cryptofs/apps/usr/palm/applications/org.webosports.app.atlas/deviceroot/atlas/atlas-sensord
+
+respawn
+respawn limit 0 0

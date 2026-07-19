@@ -35,6 +35,10 @@ cp -a "$DR/BrowserPlugins/BrowserAdapterAtlas.so" /usr/lib/BrowserPlugins/Browse
 chmod 755 /usr/lib/BrowserPlugins/BrowserAdapterAtlas.so
 cp -a "$DR/event.d/atlas" /etc/event.d/atlas
 chmod 755 /etc/event.d/atlas
+# atlas-sensord: HAL accelerometer/gyro bridge for DeviceOrientation/DeviceMotion (system-glibc helper)
+cp -a "$DR/event.d/atlas-sensord" /etc/event.d/atlas-sensord
+chmod 755 /etc/event.d/atlas-sensord
+start atlas-sensord 2>/dev/null || true   # start now; also autostarts on boot (stopped fontconfig_cache)
 mkdir -p /etc/palm/db/kinds /etc/palm/db/permissions
 cp -a "$APP/db/kinds/."       /etc/palm/db/kinds/
 cp -a "$APP/db/permissions/." /etc/palm/db/permissions/
