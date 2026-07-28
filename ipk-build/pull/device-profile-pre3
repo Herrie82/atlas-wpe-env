@@ -32,7 +32,7 @@ export BPWPE_SCREEN_H=800
 # Reap the WebProcess on every top-level navigation so a long-lived card doesn't accumulate memory across
 # a session and thrash under pressure. Costs one cold WebProcess spawn per navigation; worth it on 512MB.
 # Pairs with the DOCUMENT_VIEWER cache model + bf-cache disable the low-memory path enables in the backend.
-export BPWPE_REAP_ON_NAV=1
+export BPWPE_REAP_ON_NAV=0
 
 # WebProcess memory-pressure cap ~160MB (TouchPad default is 480). Kept above a single heavy page's
 # working set but low enough to trigger cache eviction / GC before the device OOMs.
