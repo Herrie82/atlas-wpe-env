@@ -1,0 +1,23 @@
+# WPE engine server for the HP Pre 3 ENGINE-SWAP path (Path B): the WPE-backed BrowserServer-atlas
+# takes over the STOCK browser socket so the unmodified webOS Mojo browser (com.palm.app.browser)
+# drives it. The key difference vs the TouchPad `atlas` job is BROWSERSERVER_NAME=browser, which makes
+# the server listen on /tmp/yapserver.browser — the socket the stock adapter mime (application/x-palm-
+# browser, built with -DATLAS_STOCK_BROWSER) connects to.
+#
+# Deploy as /etc/event.d/browser-wpe (or replace the stock BrowserServer launch). Adjust the cd path to
+# wherever the Pre 3 engine deviceroot is installed (this template assumes an internal-storage layout).
+start on stopped fontconfig_cache
+stop on started start_update
+description "WPE BrowserServer (stock-socket engine swap, Pre 3)"
+
+script
+    export BROWSERSERVER_NAME=browser
+    # Engine deviceroot on the Pre 3. The wrapper (wrapper-BrowserServer) derives $D=$DR/wpe-252 from its
+    # own location and sources $ATLAS/device-profile (device-profile-pre3) for the low-memory tuning.
+    cd /media/internal/atlas-engine/atlas
+    rm -f /tmp/yapserver.browser*
+    exec ./BrowserServer
+end script
+
+respawn
+respawn limit 0 0

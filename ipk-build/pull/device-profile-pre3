@@ -1,0 +1,36 @@
+# Atlas WPE engine — HP Pre 3 (mantaray) low-memory device profile.
+#
+# Sourced by wrapper-BrowserServer near the very end, AFTER the TouchPad Phase-1 tuning block, so
+# these values OVERRIDE it. Ship this file as "$ATLAS/device-profile" (the wrapper sources
+# "$ATLAS/device-profile" if it exists — see wrapper-BrowserServer). On the TouchPad no such file is
+# installed, so the TouchPad runs its Phase-1 values unchanged.
+#
+# HP Pre 3: 512MB RAM, single-core 1.4GHz (MSM8x55), Adreno 205, 480x800. The two big deltas vs the
+# TouchPad (1GB, dual-core) are HALF the RAM and ONE core.
+
+# JS heap budget: ~96MB (down from the TouchPad's ~192MB) so JSC sizes its heaps for a 512MB device.
+export JSC_forceRAMSize=100663296
+
+# Single core: raster on one thread (the TouchPad uses 2). A 2nd painting thread on a 1-core device
+# just adds contention.
+export WEBKIT_NICOSIA_PAINTING_THREADS=1
+
+# Force viewport-only ("simple") rendering for EVERY page — no tall pan buffer. This is what makes the
+# device usable on 512MB, and it works for the STOCK Mojo browser too (it can't send the atlas-simple:
+# URL marker; the backend's bpwpe_force_low_mem() honours this env). See atlas-wpe-backend.
+export BPWPE_FORCE_SIMPLE=1
+
+# Exact-viewport buffer (mult=1) rather than the 2-screen simple default — minimum footprint.
+export BPWPE_SIMPLE_SCREENS=1
+
+# WebProcess memory-pressure cap ~160MB (TouchPad default is 480). Kept above a single heavy page's
+# working set but low enough to trigger cache eviction / GC before the device OOMs.
+export BPWPE_MEM_LIMIT=160
+
+# Re-ENABLE the scroll-strip readback. The TouchPad disables it (BPWPE_NO_STRIP=1) because it renders a
+# tall pan buffer where a full-buffer readback wins; with viewport-sized rendering the small-delta strip
+# path is the faster one (per the wrapper's own note: "The strip only wins for viewport-sized rendering").
+export BPWPE_NO_STRIP=0
+
+# RGB565 tiles (16bpp) and MALLOC_ARENA_MAX=2 from the Phase-1 block are already correct for low memory
+# and are intentionally NOT overridden here.
