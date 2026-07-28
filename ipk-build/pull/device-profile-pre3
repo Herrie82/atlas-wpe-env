@@ -23,6 +23,12 @@ export BPWPE_FORCE_SIMPLE=1
 # Exact-viewport buffer (mult=1) rather than the 2-screen simple default — minimum footprint.
 export BPWPE_SIMPLE_SCREENS=1
 
+# Real panel size. webOS 2.2.4 reports the legacy-compat logical size (320x480) in luna.conf, but the
+# Pre 3 panel is physically 480x800 — without this the browser viewport is square (480x480) and pages lay
+# out in half the height. The backend (BrowserPageWPE) honours these over luna.conf.
+export BPWPE_SCREEN_W=480
+export BPWPE_SCREEN_H=800
+
 # WebProcess memory-pressure cap ~160MB (TouchPad default is 480). Kept above a single heavy page's
 # working set but low enough to trigger cache eviction / GC before the device OOMs.
 export BPWPE_MEM_LIMIT=160
