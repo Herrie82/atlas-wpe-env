@@ -63,6 +63,15 @@ Suggested order: **smoke-test with A → switch to B.**
 > `libWPEWebKit`/`WPEWebProcess`/GStreamer/`BrowserServer-atlas` need **no rebuild**. Path B renders
 > viewport-only via the adapter's `atlas-simple:` prepend + `device-profile` env, so even the server is
 > reused. The steps below are only if you want to rebuild from scratch.
+>
+> **Engine note:** the reused engine is **symbol-stripped (67 MB) but NOT feature-stripped** — it still
+> carries video / WebRTC / WebAudio + the full GStreamer stack. The Phase-3 feature-strip
+> (`-DENABLE_VIDEO=OFF -DENABLE_WEB_RTC=OFF -DENABLE_WEB_AUDIO=OFF -DUSE_AVIF=OFF -DUSE_JPEGXL=OFF`,
+> `GPU_PROCESS=OFF`) reclaims RAM/flash but needs the ~40-min WebKit rebuild in a separate build dir;
+> it is not in the reuse ipk.
+>
+> **The prebuilt full Pre 3 ipk is `~/webos/Pre3/atlas-pre3-build/org.webosports.app.atlas_0.9.7_pre3.ipk`**
+> (built by `build-ipk-pre3.sh`).
 
 All builds are ARM cross-builds run from `atlas-wpe-env` (see the existing scripts). Check out the
 `pre3-lowmem` branch in each repo first.
