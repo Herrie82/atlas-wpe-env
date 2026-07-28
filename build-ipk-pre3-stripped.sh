@@ -56,6 +56,9 @@ for name in WPEWebProcess WPENetworkProcess; do
   cp -f "$SRC" "$DR/libexec/wpe-webkit-2.0/$name"
   "$STRIP_BIN" --strip-unneeded "$DR/libexec/wpe-webkit-2.0/$name" || true
   patchelf --set-interpreter "$DEVPATH/lib/ld-linux.so.3" --force-rpath --set-rpath "$RP" "$DR/libexec/wpe-webkit-2.0/$name"
+  # WebProcess needs libEGL.so.1 as a direct NEEDED so the Adreno subdriver's eglSubDriverWait resolves
+  # in the global scope (same bring-up fix as the full build; the base ipk's WebProcess is replaced here).
+  [ "$name" = WPEWebProcess ] && patchelf --add-needed libEGL.so.1 "$DR/libexec/wpe-webkit-2.0/$name"
   echo "  patched $name"
 done
 
@@ -70,9 +73,9 @@ echo "  deviceroot ${BEFORE}MB -> ${AFTER}MB"
 
 echo "=== 5. repack ==="
 VER=$(grep -oE '^Version: .*' "$W/ctl/control" | awk '{print $2}')
-sed -i -E "s/512MB low-memory profile/512MB low-memory, feature-stripped engine/" "$W/ctl/control"
-( cd "$W/data" && tar czf "$W/data.tar.gz" --owner=0 --group=0 ./* )
-( cd "$W/ctl"  && tar czf "$W/control.tar.gz" --owner=0 --group=0 ./* )
+sed -i -E "s/graphics bring-up\)\./graphics bring-up; feature-stripped engine)./" "$W/ctl/control"
+( cd "$W/data" && tar --format=ustar -czf "$W/data.tar.gz" --owner=0 --group=0 ./* )
+( cd "$W/ctl"  && tar --format=ustar -czf "$W/control.tar.gz" --owner=0 --group=0 ./* )
 echo "2.0" > "$W/debian-binary"
 IPK="$OUT/${APPNAME}_${VER}_pre3-stripped.ipk"; rm -f "$IPK"
 ( cd "$W" && ar rc "$IPK" debian-binary control.tar.gz data.tar.gz )
