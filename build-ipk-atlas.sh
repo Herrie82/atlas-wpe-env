@@ -34,16 +34,38 @@ OUT="${OUT:-$APPSRC/ipks}"
 DOSTRIP="${DOSTRIP:-1}"
 # Packaging target. The PAYLOAD (data.tar.gz) is identical either way — only control.tar.gz differs, so a
 # feed can index the same engine bits without repacking anything.
-#   standalone (default) : postinst/prerm restart LunaSysMgr themselves (WOQI / by-hand installs, where
+#   standalone (default) : postinst restarts LunaSysMgr itself (WOQI / by-hand installs, where
 #                          there is no installer to defer to). No Depends — nothing else to resolve them.
-#   feed                 : postinst/prerm must NOT restart Luna (it would kill a batch installer running
+#   feed                 : postinst must NOT restart Luna (it would kill a batch installer running
 #                          under it); instead declare PostInstallFlags=RestartLuna, and depend on the
 #                          feed's OpenSSL 1.1 package so /usr/lib/ssl11 gets pulled in.
 # Use the wrappers build-ipk-feed.sh / build-ipk-standalone.sh, or set ATLAS_PKG_TARGET here.
 ATLAS_PKG_TARGET="${ATLAS_PKG_TARGET:-standalone}"
 case "$ATLAS_PKG_TARGET" in feed|standalone) ;; *) echo "build-ipk-atlas: ATLAS_PKG_TARGET must be 'feed' or 'standalone' (got '$ATLAS_PKG_TARGET')" >&2; exit 1 ;; esac
-# The package a feed build depends on for OpenSSL 1.1 (/usr/lib/ssl11). Override for another feed.
-FEED_DEPENDS="${FEED_DEPENDS:-org.webosarchive.tls-updates}"
+# Depends: for a feed build. EMPTY BY DEFAULT, on purpose — the package does no environment checking,
+# it just installs; qualifying environments is the FEED's job.
+#
+# Why not declare the OpenSSL 1.1 dependency here: ipkg enforces Depends against its own status file and
+# has no notion of webOS version, so a hard dependency cannot be "3.0.5 only". webOS CE 3.1.0 bakes the
+# TLS 1.3 stack (/usr/lib/ssl11) into the OS image and never registers org.webosarchive.tls-updates —
+# the Modernize bundle is MaxWebOSVersion 3.0.9 and deliberately not offered there — so declaring it made
+# ipkg refuse the install on a device that already had everything Atlas needs:
+#     ERROR: Cannot satisfy the following dependencies for org.webosports.app.atlas:
+#              org.webosarchive.tls-updates
+# and abort mid-unpack, leaving the app directory half-created (empty deviceroot, no launcher icon).
+#
+# The FEED's Packages stanza carries `Depends: org.webosarchive.tls-updates` instead, and that qualifies
+# itself: Preware's loadPackage() DROPS a package whose MaxWebOSVersion is older than the running OS
+# (packages.js — not merely hides it), and getDependencies() only queues names it can find in the loaded
+# set. So on 3.0.5 tls-updates loads and is pulled in; on 3.1.0 it is filtered out and the dependency
+# resolves to nothing. Verified against Preware 1.9.18 on-device.
+#
+# Keep the feed stanza's Depends in PLAIN comma syntax — Preware's parser splits on "," only, so an
+# alternation ("A | B") reaches it as one unknown package name and queues nothing, on 3.0.5 too.
+#
+# Set FEED_DEPENDS=... to emit a Depends line anyway (for a feed that resolves OpenSSL under its own
+# name, or one whose index cannot carry dependency metadata).
+FEED_DEPENDS="${FEED_DEPENDS:-}"
 APPNAME=org.webosports.app.atlas
 CRYPTO_DR="/media/cryptofs/apps/usr/palm/applications/$APPNAME/deviceroot"
 
@@ -235,16 +257,17 @@ webOS-Package-Format-Version: 2
 webOS-Packager-Version: 3.0.5b38
 EOF
 if [ "$ATLAS_PKG_TARGET" = feed ]; then
-  # Depends: the feed's own OpenSSL 1.1 package — Atlas links /usr/lib/ssl11 for HTTPS, which a stock
-  # webOS 3.0.x device does not have. Only meaningful where that package exists, hence feed-only.
-  # Source: postinst/prerm deliberately do NOT restart LunaSysMgr in a feed build (it would kill a batch
+  # Depends: normally NOT emitted — see the FEED_DEPENDS block above. The OpenSSL 1.1 requirement is
+  # declared in the feed's Packages stanza, where MaxWebOSVersion can qualify it per OS version; ipkg
+  # cannot, and a hard dependency here just blocks the install on webOS CE 3.1.0.
+  if [ -n "$FEED_DEPENDS" ]; then echo "Depends: $FEED_DEPENDS" >> "$CTRL/control"; fi
+  # Source: postinst deliberately does NOT restart LunaSysMgr in a feed build (it would kill a batch
   # installer running under it), so the reload is declared here for the installer to do once, at the end.
   # NOTE: Preware reads these flags from the FEED's Packages index Source block, not from this control —
   # a distributor must carry them into their stanza too. Emitting them keeps the ipk self-describing.
   # The display half of Source (Feed, Category, Title, FullDescription, Icon, DeviceCompatibility,
   # LastUpdated) stays out: that is per-feed catalog metadata, not a property of this package.
   cat >> "$CTRL/control" <<EOF
-Depends: $FEED_DEPENDS
 Source: { "PostInstallFlags":"RestartLuna", "PostUpdateFlags":"RestartLuna", "PostRemoveFlags":"RestartLuna" }
 EOF
 fi
@@ -257,12 +280,38 @@ for s in postinst prerm; do
 done
 ( cd "$CTRL" && tar czf "$OUT/control.tar.gz" --owner=0 --group=0 ./control ./postinst ./prerm )
 
+# The SAME two scripts again, under the names webOS's own installer looks for. There are two install
+# paths on this device and they disagree about who runs the control scripts:
+#
+#   Preware (org.webosinternals.ipkgservice) runs
+#       /usr/bin/ipkg -o /media/cryptofs/apps -force-overwrite install <ipk>
+#       IPKG_OFFLINE_ROOT=/media/cryptofs/apps /bin/sh <info>/<pkg>.postinst
+#     -- i.e. it knows ipkg SKIPS postinst in offline-root mode ("Configuring <pkg> / (offline root
+#        mode: not running <pkg>.postinst)") and runs the deferred script itself. control.tar.gz's
+#        postinst/prerm are for this path.
+#
+#   com.palm.appinstaller (WebOS Quick Install, a tapped .ipk, installNoVerify) runs the same ipkg
+#     command and then STOPS. It never runs the deferred postinst. What it does instead is extract the
+#     ipk with `ar x` into a temp dir and run <tmpdir>/pmPostInstall.script (and pmPreRemove.script on
+#     removal) as root -- webOS package format v2. With no such member it writes a 0-byte placeholder
+#     and moves on, reporting SUCCESS.
+#
+# So a package that only ships postinst/prerm installs through that path with its ENGINE HALF MISSING:
+# no BrowserAdapterAtlas.so, no /etc/event.d/atlas, no GPU driver staged, no db8 kinds. Atlas opens and
+# renders nothing, which is exactly the "installs but cannot open a web page" report. `ar x` extracts
+# every member, so shipping the scripts a second time as plain ar members covers that path too.
+# Only ONE of the two ever runs for a given install; postinst/prerm are idempotent regardless.
+cp "$CTRL/postinst" "$OUT/pmPostInstall.script"; chmod 755 "$OUT/pmPostInstall.script"
+cp "$CTRL/prerm"    "$OUT/pmPreRemove.script";   chmod 755 "$OUT/pmPreRemove.script"
+
 echo "=== 9. ar the ipk ==="
 IPK="$OUT/${APPNAME}_${VER}_all.ipk"
 printf '2.0\n' > "$OUT/debian-binary"
 rm -f "$IPK"
-( cd "$OUT" && ar rc "$(basename "$IPK")" debian-binary control.tar.gz data.tar.gz )
-rm -f "$OUT/debian-binary" "$OUT/control.tar.gz" "$OUT/data.tar.gz"
+( cd "$OUT" && ar rc "$(basename "$IPK")" debian-binary control.tar.gz data.tar.gz \
+                     pmPostInstall.script pmPreRemove.script )
+rm -f "$OUT/debian-binary" "$OUT/control.tar.gz" "$OUT/data.tar.gz" \
+      "$OUT/pmPostInstall.script" "$OUT/pmPreRemove.script"
 
 echo "== built: $IPK  ($(du -h "$IPK" | cut -f1), installed ~$((INSTALLED_KB/1024)) MB, v$VER) =="
 if [ "${ATLAS_WEBKIT_FROM_SOURCE:-0}" = 1 ]; then

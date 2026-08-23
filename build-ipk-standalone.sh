@@ -1,7 +1,8 @@
 #!/bin/bash
 # Build the Atlas ipk for STANDALONE distribution — WebOS Quick Install, a direct download, or installing
 # by hand. No package manager is involved, so the package has to finish the job itself:
-#   - postinst/prerm restart LunaSysMgr themselves (it must reload before it can see the browser plugin).
+#   - postinst restarts LunaSysMgr itself (it must reload before it can see the browser plugin). prerm
+#     never does, on either target -- it runs from inside LunaSysMgr before `ipkg remove`.
 #     Nothing is running under it to be killed, and there is no installer to defer the reload to.
 #   - No Depends. There is no feed to resolve them, and a dependency nothing can satisfy just makes the
 #     install fail. OpenSSL 1.1 (/usr/lib/ssl11) still has to be installed separately for HTTPS to work —

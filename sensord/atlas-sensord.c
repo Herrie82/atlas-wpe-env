@@ -29,6 +29,9 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/stat.h>
+#include <sys/time.h>
+#include <netinet/in.h>
+#include <sys/wait.h>
 
 #include <hal/hal_device.h>
 #include <hal/hal_sensor_acceleration.h>
@@ -124,6 +127,49 @@ static void drain_lin(hal_device_handle_t h, float *x, float *y, float *z)   /* 
     }
 }
 
+/* Engine control. The Enyo app runs as luna inside LunaSysMgr and cannot exec, and anything routed
+ * through BrowserServer is dead once BS wedges (atlas-wpe-env#3) — so a loopback HTTP GET here is how
+ * it asks for a restart. We are the only root daemon in the package and we do not depend on BS.
+ * Loopback-only; the one action it offers is restarting our own browser engine. */
+#define CTL_PORT 8442
+
+/* Detached so the poll loop keeps running. Never kills atlas-sensord — that is us.
+ * Double-fork: `start atlas` blocks until the job is up, and we never wait(), so a single fork
+ * would leave a zombie per restart. The grandchild is orphaned to init, which reaps it. */
+static void restart_engine(void)
+{
+    pid_t p = fork();
+    if (p < 0) return;
+    if (p > 0) { waitpid(p, NULL, 0); return; }
+    if (fork() != 0) _exit(0);
+    setsid();
+    system("/sbin/stop atlas >/dev/null 2>&1; "
+           "/usr/bin/killall -9 BrowserServer-atlas qcamd qspkd qmicd >/dev/null 2>&1; "
+           "/sbin/start atlas >/dev/null 2>&1");
+    _exit(0);
+}
+
+/* Answer one control request. Returns 1 if a restart was asked for. */
+static int ctl_serve(int c)
+{
+    struct timeval tv; tv.tv_sec = 0; tv.tv_usec = 300000;
+    setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    char req[256]; int n = recv(c, req, sizeof req - 1, 0);
+    int ok = 0;
+    if (n > 0) {
+        req[n] = 0;
+        ok = (strstr(req, "/restart-engine") != NULL);
+        char rsp[192];
+        snprintf(rsp, sizeof rsp,
+                 "HTTP/1.0 %s\r\nAccess-Control-Allow-Origin: *\r\n"
+                 "Content-Type: text/plain\r\nContent-Length: 2\r\nConnection: close\r\n\r\n%s",
+                 ok ? "200 OK" : "404 Not Found", ok ? "ok" : "no");
+        send(c, rsp, strlen(rsp), 0);
+    }
+    close(c);
+    return ok;
+}
+
 int main(int argc, char **argv)
 {
     if (argc > 1 && strcmp(argv[1], "-v") == 0) g_verbose = 1;
@@ -149,12 +195,31 @@ int main(int argc, char **argv)
     listen(srv, MAX_CLIENTS);
     if (g_verbose) fprintf(stderr, "sensord: listening on %s (accelFd=%d gyroFd=%d)\n", SOCK_PATH, fdAccel, fdGyro);
 
+    /* Control socket. Not fatal if it fails — the sensor bridge still works without it. */
+    int ctl = socket(AF_INET, SOCK_STREAM, 0);
+    if (ctl >= 0) {
+        int one = 1;
+        setsockopt(ctl, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+        struct sockaddr_in ca; memset(&ca, 0, sizeof ca);
+        ca.sin_family = AF_INET;
+        ca.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        ca.sin_port = htons(CTL_PORT);
+        if (bind(ctl, (struct sockaddr*)&ca, sizeof ca) < 0 || listen(ctl, 4) < 0) {
+            perror("sensord: ctl");
+            close(ctl); ctl = -1;
+        } else if (g_verbose) {
+            fprintf(stderr, "sensord: engine control on 127.0.0.1:%d\n", CTL_PORT);
+        }
+    }
+
     int clients[MAX_CLIENTS]; int nclient = 0;
     float ax=0,ay=0,az=0, gx=0,gy=0,gz=0, mx=0,my=0,mz=0, lx=0,ly=0,lz=0;
 
     while (g_run) {
-        struct pollfd pfd[5 + MAX_CLIENTS]; int n = 0;
+        struct pollfd pfd[6 + MAX_CLIENTS]; int n = 0;
         int iSrv = n; pfd[n].fd = srv; pfd[n].events = POLLIN; n++;
+        int iCtl = -1;
+        if (ctl >= 0) { iCtl = n; pfd[n].fd = ctl; pfd[n].events = POLLIN; n++; }
         int iAcc = -1, iGyr = -1, iMag = -1, iLin = -1;
         if (fdAccel >= 0) { iAcc = n; pfd[n].fd = fdAccel; pfd[n].events = POLLIN; n++; }
         if (fdGyro  >= 0) { iGyr = n; pfd[n].fd = fdGyro;  pfd[n].events = POLLIN; n++; }
@@ -164,6 +229,15 @@ int main(int argc, char **argv)
 
         int r = poll(pfd, n, 1000);
         if (r < 0) { if (errno == EINTR) continue; break; }
+
+        /* engine restart request */
+        if (iCtl >= 0 && (pfd[iCtl].revents & POLLIN)) {
+            int c = accept(ctl, NULL, NULL);
+            if (c >= 0 && ctl_serve(c)) {
+                fprintf(stderr, "sensord: engine restart requested\n");
+                restart_engine();
+            }
+        }
 
         /* accept new clients */
         if (pfd[iSrv].revents & POLLIN) {

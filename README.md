@@ -1,8 +1,10 @@
 # atlas-wpe-env
 
 Build environment, cross-build scripts, toolchain recipe, and deploy/packaging for the **Atlas**
-browser engine on the HP TouchPad (webOS 3.0.5) — the WPE WebKit backend, `BrowserServer-atlas`, and
-the self-contained IPK.
+browser engine on the HP TouchPad (webOS 3.0.5 and webOS CE 3.1.0) — the WPE WebKit backend,
+`BrowserServer-atlas`, and the self-contained IPK. One IPK installs on both OS versions; see
+[BUILDING.md § Who runs the install scripts](BUILDING.md#who-runs-the-install-scripts) and the
+`FEED_DEPENDS` note in `build-ipk-atlas.sh` for why that took three separate packaging fixes.
 
 - **[BUILDING.md](BUILDING.md)** — reproduce the whole engine build from a clean host (toolchain →
   sysroot → components → deploy).
