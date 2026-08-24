@@ -263,14 +263,50 @@ binary. A/B on `example.com`: 113 vs 115 frames, 12 vs 13 `WPEWebProcess` spawns
 
 `deploy-252.sh` / `redeploy-webkit.sh` cover the fuller flows (WebKit runtime, test harness).
 
-### The deadlock watchdog and `-d` (do not raise it back)
+### The deadlock watchdog and `-d`
 
-The boot wrapper runs the engine with `-d 90000`. That number is load-bearing for the **GPU wedge**
-([#3](https://github.com/Herrie82/atlas-wpe-env/issues/3)): a wedge parks BrowserServer's main thread in
-`futex_wait_queue_me` with yap still accepting but nothing being serviced, and the yap deadlock watchdog
-(`YapServer.cpp`) is the **only** thing that recovers it — it `abort()`s, upstart respawns, and the app's
+> **As of Atlas 0.9.10 the watchdog is OFF (`-d 0`).** The section below describes why it existed and how
+> it was tuned; keep it for the day someone builds a detector that works. What went wrong is that
+> `YapServer`'s "stalled **and** idle" gate — the very thing that made a short `-d` safe — is *also* an
+> exact description of a healthy engine with nothing to do. The heartbeat counter is only proof the main
+> loop is BUSY, never proof it is ALIVE, so an idle engine looks identical to a wedged one. Measured on
+> webOS CE 3.1.0 with one idle card open and nobody touching the tablet:
+>
+>     BrowserServer-atlas: Deadlock detected; aborting! (13 cpu ticks in the last 90000ms)
+>     BrowserServer-atlas: Deadlock detected; aborting! (155 cpu ticks in the last 90000ms)
+>
+> Two aborts in six minutes, each tearing down and reloading the user's cards. Note both are far *below*
+> the 2250-tick busy threshold, so the busy-stall deferral never engages — being idle is what condemns it.
+>
+> **Nothing replaces it.** Atlas does not attempt to detect a hang — every heuristic tried either fired
+> at healthy idle engines or missed real wedges. Clearing one is a user action: the **Restart Browser
+> Engine** menu item, which asks `atlas-sensord` to restart the `atlas` job over a loopback control
+> socket on `127.0.0.1:8442`. That routing is forced — the Enyo app runs as `luna` and cannot exec, and
+> anything through BS is dead when BS is wedged; sensord is root and does not depend on BS.
+>
+> Re-enable `-d` here only with a detector that has the same property: a heartbeat that advances
+> unconditionally (proving the loop is ALIVE, not that it is BUSY), so "counter stalled" alone is the
+> signal and the CPU gate can be dropped.
+
+**The GPU wedge is fixed (2026-08-23)** — and it was never the GPU. See
+`atlas-wpe-backend/ARCHITECTURE.md` ("The GPU wedge — root cause") for the full account. In short, two
+bugs in `libWPEBackend-atlas.so`'s UIProcess frame channel:
+
+1. the backend closed, on the first frame, the socketpair end it had *returned to WebKit* — but WebKit
+   adopts and closes that fd itself within milliseconds, so the backend's later `close()` hit whatever
+   had reused the number (proven on-device: the main loop was found blocked in `recv()` on an fd whose
+   peer was a WPEWebProcess's **WebKit IPC socket**);
+2. the per-frame FRAME_ACK was never read by the WebProcess, so the blocking ack `send()` eventually
+   parked the main loop once the socket buffer filled — "right after a good frame".
+
+Both are in `wpe-atlas-backend.c`; rebuild with `build-backend-atlas.sh` and the ipk picks it up.
+The history below is kept because the watchdog settings it explains are still in the tree.
+
+The boot wrapper used to run the engine with `-d 90000`. That number was load-bearing for the **GPU wedge**
+([#3](https://github.com/Herrie82/atlas-wpe-env/issues/3)) before the fix above: a wedge parks BrowserServer's main thread in
+`futex_wait_queue_me` (or `__skb_recv_datagram`) with yap still accepting but nothing being serviced, and the yap deadlock watchdog
+(`YapServer.cpp`) was the **only** thing that recovered it — it `abort()`s, upstart respawns, and the app's
 cards reload themselves.
-
 It used to be `-d 600000`, raised from the 15 s default because a memory-pressure GC stall would trip the
 watchdog and abort a perfectly healthy engine. The cost was that a wedge took **14 min 30 s** to clear,
 which every user reads as permanent. `YapServer.cpp` now gates the abort on the process **also being
@@ -289,6 +325,9 @@ Two practical notes: that message goes to **syslog** (`/var/log/messages`), *not
 the right file when checking whether the watchdog fired. And do not lower `-d` below ~90 s on an engine
 built **before** this gate, or GC stalls will start killing healthy engines again.
 
+To recover a wedge by hand now that the watchdog is off: `stop atlas; start atlas` (the cards reload
+themselves, same as they did after an abort).
+
 ## 7. Package the installable ipk ✅
 
 `build-ipk-atlas.sh` produces the real, installable `org.webosports.app.atlas_<ver>_all.ipk` (~99 MB
@@ -298,7 +337,8 @@ which cannot run outside Herrie's tree (they source the unpublished `env-glibc-g
 
 ```sh
 source atlas-wpe-env/env-atlas-cross.sh
-atlas-wpe-env/build-ipk-atlas.sh              # -> ~/atlas-ipk/org.webosports.app.atlas_<ver>_all.ipk
+atlas-wpe-env/build-ipk-standalone.sh         # -> atlas-browser-app/ipks/standalone/org.webosports.app.atlas_<ver>_all.ipk
+atlas-wpe-env/build-ipk-feed.sh               # -> atlas-browser-app/ipks/feed/... (Preware feed build)
 DOSTRIP=0 atlas-wpe-env/build-ipk-atlas.sh    # keep symbols, for gdb
 ```
 
@@ -337,17 +377,18 @@ the bundled `ld-linux.so.3`.
 ### Installing it
 
 `postinst` must run as **root**, so install through Preware or WebOS Quick Install — *not* `palm-install`.
+Since 0.9.10 the package carries its setup script under **both** names the two installers look for, so
+either path completes on its own — see *Who runs the install scripts* below.
 Headless over novacom, using the same appinstaller service those front-ends use:
 
 ```sh
-novacom put file:///media/internal/atlas.ipk < ~/atlas-ipk/org.webosports.app.atlas_0.9.7_all.ipk
+novacom put file:///media/internal/atlas.ipk < ~/Projects/atlas-browser-app/ipks/standalone/org.webosports.app.atlas_0.9.9_all.ipk
 # then, ON THE DEVICE (see the -n warning below):
 luna-send -n 20 -f palm://com.palm.appinstaller/installNoVerify \
   '{"target":"/media/internal/atlas.ipk","subscribe":true,"uncompressedSize":214232}' > /tmp/reply.log 2>&1 &
 LS=$!; i=0
 while [ $i -lt 72 ]; do grep -q 'SUCCESS\|FAILED' /tmp/reply.log && break; sleep 5; i=$((i+1)); done
 kill -9 $LS 2>/dev/null
-sh /path/to/ipk-postinst.sh        # installNoVerify does NOT run postinst — run it yourself, as root
 ```
 
 > **`luna-send -n <n>` blocks until it receives exactly `n` replies.** `installNoVerify` emits only a
@@ -355,10 +396,52 @@ sh /path/to/ipk-postinst.sh        # installNoVerify does NOT run postinst — r
 > in the background with a bounded poll, as above. (`remove` happens to emit exactly 3, which is why
 > `-n 3` returns cleanly there.)
 >
-> **`installNoVerify` installs the payload and registers the package, but does not execute `postinst`** —
-> the rootfs bits (`/etc/event.d/atlas`, the NPAPI adapter, `/var/atlas252`, db8 kinds, ls2 roles) will
-> all be missing and the engine will not start. Run `ipk-postinst.sh` manually as root afterwards. It is
-> idempotent, so running it again after a Preware/Quick Install is harmless.
+> **A standalone-target install restarts LunaSysMgr from its own postinst**, which kills the subscription
+> `installNoVerify` is answering on — so the poll above often ends with
+> `"com.palm.appinstaller is not running"` rather than `SUCCESS`, on an install that completed fine.
+> Check the result on the device (below) instead of trusting the last subscription message.
+
+#### Who runs the install scripts
+
+`ipkg -o <root> install` — the command **both** installers use — does not run `postinst`. It says so:
+
+    Configuring org.webosports.app.atlas
+    (offline root mode: not running org.webosports.app.atlas.postinst)
+
+The two front-ends handle that differently, and the difference is invisible until the browser renders
+nothing:
+
+| | what it does | what the package must ship |
+|---|---|---|
+| **Preware** (`org.webosinternals.ipkgservice`) | runs ipkg, then `IPKG_OFFLINE_ROOT=/media/cryptofs/apps /bin/sh <info>/<pkg>.postinst` itself | `postinst`/`prerm` in `control.tar.gz` |
+| **`com.palm.appinstaller`** (WebOS Quick Install, tapped `.ipk`, `installNoVerify`) | runs ipkg and stops; separately `ar x`es the ipk and runs `<tmpdir>/pmPostInstall.script` (and `pmPreRemove.script` on removal) as root — webOS package format v2 | `pmPostInstall.script`/`pmPreRemove.script` as **ar members** |
+
+With no `pmPostInstall.script` member the appinstaller writes a 0-byte placeholder into
+`/media/cryptofs/apps/.scripts/<pkg>/` and reports **SUCCESS** for an install whose entire engine half is
+missing. `build-ipk-atlas.sh` therefore emits the same two scripts twice, once under each name; only one
+of them ever runs for a given install, and they are idempotent anyway.
+
+Check afterwards that the engine half actually landed:
+
+```sh
+ls -l /usr/lib/BrowserPlugins/BrowserAdapterAtlas.so /etc/event.d/atlas /var/atlas252
+ls -l /media/cryptofs/apps/usr/palm/applications/org.webosports.app.atlas/deviceroot/wpe-252/lib/libEGL.so.1
+#   ^ should be the DEVICE's Adreno driver (171517 bytes), not the bundled fallback
+ps -ef | grep BrowserServer-atlas    # running, with -d 0
+```
+
+#### Uninstalling: kill the helper daemons first
+
+`/media/cryptofs` is FUSE — unlinking a file a process still has open renames it to `.fuse_hiddenXXXXXXXX`
+instead of removing it. The boot wrapper backgrounds `qcamd`/`qspkd`/`qmicd` as children of the engine, and
+if the engine dies without reaping them they re-parent to init and keep holding the engine libs open. A
+`prerm` that only kills `BrowserServer-atlas` therefore leaves an app directory `rm -rf` cannot remove:
+
+    rm: can't remove '.../deviceroot/atlas': Directory not empty
+    rm: can't remove '.../deviceroot/wpe-252/lib': Directory not empty
+
+leaving an empty `deviceroot` skeleton that the next install unpacks on top of. `ipk-prerm.sh` kills all of
+`BrowserServer-atlas qcamd qspkd qmicd atlas-sensord` (TERM then KILL) and sweeps `.fuse_hidden*`.
 
 `postinst` copies the device's real Adreno driver over the versioned GPU sonames, creates the
 `/var/atlas252` bridge symlink, installs the adapter/upstart/ls2-role/db8 files into the rootfs, registers

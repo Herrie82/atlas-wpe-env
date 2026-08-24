@@ -80,13 +80,24 @@ export WEBKIT_NICOSIA_PAINTING_THREADS=2   # use BOTH cores for Cairo/Nicosia ti
                                            # otherwise idle while BS blocks on the GPU readback, so it overlaps
                                            # cleanly (readback ticks up only ~50ms from contention; net win).
 export MALLOC_ARENA_MAX=2                  # cap glibc per-thread arenas (GStreamer/fontconfig side)
-export BPWPE_PRESPAWN=1                     # Warm the WebProcess with about:blank at card-open (attachToBuffer)
-                                           # rather than on the first openUrl, so the ~3-4s WebProcess cold
-                                           # spawn (map 67MB libWPEWebKit + JSC/bundle init) overlaps the
-                                           # "open Atlas -> start page -> type URL" gap. The warm process is
-                                           # reused for the real navigation and REAPED on card close, so it
-                                           # costs no idle memory when Atlas isn't open. BS itself is a boot
-                                           # service (always up); this only moves the WebProcess spawn earlier.
+# BPWPE_PRESPAWN — OFF (2026-08-04). It warms the WebProcess by loading about:blank at card-open
+# (attachToBuffer) instead of on the first openUrl, so the ~3-4s cold spawn overlaps the "open Atlas
+# -> start page -> type URL" gap. The idea is fine; the implementation is not INVISIBLE, and that
+# breaks navigation:
+#   The warm-up goes through the ORDINARY load path in BrowserPageWPE. Nothing there consults
+#   m_prewarmBlank (it is read only in openUrl, to tear the view down for a private/simple card), so
+#   the throwaway load reports itself to the adapter as a real page: msgLoadStarted, clearToWhite +
+#   msgContentsSizeChanged at commit, and msgTitleAndUrlChanged("", "about:blank") twice over — once
+#   from onUriChanged the moment the URI flips, again at load-finished — then msgLoadStopped.
+#   The app believes all of it: Browser.pageTitleChanged assigns this.url = "about:blank", rewrites
+#   the address bar and sets changedUrl (which writes about:blank into history on the next progress
+#   tick), and loadStopped fires doPageLoadStopped for it.
+#   So a card opened WITH a target (launchParams / luna-send / a link from another app) has its URL
+#   overwritten by the warm-up that is racing it, and any card open blanks the buffer mid-flight.
+# Turn this back on only together with a BrowserPageWPE that gates the adapter-facing messages on
+# m_prewarmBlank (and drops the flag when the blank load ends or a real openUrl supersedes it). The
+# backend ships it off by default for this reason; this line used to override that.
+#export BPWPE_PRESPAWN=1
 export BPWPE_NO_STRIP=1                    # DISABLE the P2 scroll-strip readback — correct for the TALL pan
                                            # buffer (default mult=4): on a fling the recenter always jumps
                                            # ~slack/2 (delta ~960-1400px), so the "strip" is ~1/3-1/2 the
@@ -130,21 +141,25 @@ export ATLAS_CAMERA_NO_DECODEBIN=1         # getUserMedia: skip decodebin3 in th
 # would be looked up under /media/internal (which we no longer populate).
 export WEBKIT_EXEC_PATH=$D/libexec/wpe-webkit-2.0
 export WEBKIT_INJECTED_BUNDLE_PATH=$D/lib/wpe-webkit-2.0/injected-bundle
-# Deadlock watchdog: the default 15000ms aborts BS when the main thread stalls in a
-# memory-pressure GC / swap-in under heavy accumulated state (idle "random crash" — confirmed
-# via core: YapServerDeadlockPriv::deadlockThreadTimerCallback -> abort). A slow GC recovers in
-# well under 45s, hence the 10-MINUTE timeout this used to carry.
+# Deadlock watchdog: OFF (-d 0). YapServer's detector calls the main loop deadlocked when its
+# heartbeat counter has not advanced across one `-d` interval AND the process looks idle; both are
+# also true of a perfectly healthy BrowserServer that simply had nothing to do, so it aborts a live
+# engine. Observed on-device 2026-08-23 (webOS CE 3.1.0, Atlas 0.9.8, one idle card open):
+#   BrowserServer-atlas: Deadlock detected; aborting! (13 cpu ticks in the last 90000ms)
+#   BrowserServer-atlas: Deadlock detected; aborting! (155 cpu ticks in the last 90000ms)
+# two aborts in six minutes with nobody touching the tablet. upstart respawns us each time, so the
+# user's cards are torn down and reloaded at random — worse, in practice, than the failure the
+# watchdog exists to recover.
 #
-# 2026-08-03: that 10 minutes is ALSO the only thing that recovers the GPU wedge
-# (atlas-wpe-env#3). Measured on-device: the wedge parks BS's main thread in futex_wait_queue_me
-# (yap keeps accepting, openURL is never serviced); the WebProcess is idle and innocent — killing
-# it does NOT free BS. The watchdog does fire and upstart respawns us, but the checker thread only
-# compares every `-d` ms and abandons on the SECOND miss, so recovery took 14m30s — long enough
-# that every user reads it as permanent and reboots.
+# What it is giving up: the watchdog was the only thing that recovered the GPU wedge
+# (atlas-wpe-env#3) without a reboot -- 14m30s of a dead browser, cut to ~63s once -d came down to
+# 90s. With the detector off a wedge is permanent again until the engine is restarted by hand
+# (`stop atlas; start atlas`) or the tablet reboots. That is the deliberate trade: a rare wedge that
+# needs a manual restart beats frequent unprompted engine restarts during normal use.
 #
-# 90s => the wedge self-heals in ~1.5-3 min instead, still ~2x above the worst legitimate GC stall
-# we have seen. Do NOT drop this below ~90s until a BrowserServer carrying the CPU-gated watchdog
-# (YapServer.cpp: abort only when the main loop is stalled AND the process is idle) is deployed —
-# with that in place a wedged BS is distinguishable from a busy one (0.6% CPU vs a pegged core)
-# and 45000 becomes safe. Tune via -d / DeadlockTimeoutMs setting (-1 = disabled).
-exec $D/BrowserServer-atlas -platform Minimal -d 90000 >>/media/ram/bs-atlas.log 2>&1
+# Nothing replaces it: Atlas does not try to detect a hang at all. Clearing one is a USER action --
+# the Restart Browser Engine menu item, which asks atlas-sensord (root, and not dependent on BS) to
+# restart this job. Re-enable -d here only with a detector that cannot fire at a healthy idle engine,
+# i.e. an unconditional heartbeat proving the loop is ALIVE rather than BUSY.
+#   -d 0  = disabled (also -1; anything <= 0)   -d 90000 = the old 90s CPU-gated behaviour
+exec $D/BrowserServer-atlas -platform Minimal -d 0 >>/media/ram/bs-atlas.log 2>&1

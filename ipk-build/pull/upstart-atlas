@@ -13,4 +13,9 @@ script
 end script
 
 respawn
+# KEEP THIS UNLIMITED. Unlike atlas-sensord (capped at 5/60 so a missing binary can't crash-loop), the
+# engine's recovery from a GPU wedge (#3) IS an abort + respawn: BrowserServer's deadlock watchdog aborts
+# a wedged engine (-d 90000 in the wrapper) and relies on upstart bringing it straight back, after which
+# the app's cards reload themselves. Any respawn cap here silently converts the Nth wedge of a session
+# into a dead browser that only a reboot fixes — which is exactly what this recovery path exists to avoid.
 respawn limit 0 0
