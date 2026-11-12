@@ -127,6 +127,38 @@ static void drain_lin(hal_device_handle_t h, float *x, float *y, float *z)   /* 
     }
 }
 
+// Sensors open only while a client is connected, so the system sensord is idle when no page listens
+static hal_device_handle_t hAccel, hGyro, hMag, hLin;
+static int fdAccel = -1, fdGyro = -1, fdMag = -1, fdLin = -1;
+
+static void sensors_close(void)
+{
+    if (hAccel) hal_device_close(hAccel);
+    if (hGyro)  hal_device_close(hGyro);
+    if (hMag)   hal_device_close(hMag);
+    if (hLin)   hal_device_close(hLin);
+    hAccel = hGyro = hMag = hLin = NULL;
+    fdAccel = fdGyro = fdMag = fdLin = -1;
+    if (g_verbose) fprintf(stderr, "sensord: sensors closed\n");
+}
+
+// Returns 0 once the accelerometer is open; the other three are optional
+static int sensors_open(void)
+{
+    if (hAccel) return 0;
+    hAccel = open_sensor(HAL_DEVICE_SENSOR_ACCELERATION, "acceleration");
+    if (!hAccel) { fprintf(stderr, "sensord: no accelerometer\n"); return -1; }
+    hGyro = open_sensor(HAL_DEVICE_SENSOR_ANGULAR_VELOCITY, "angular_velocity");
+    hMag  = open_sensor(HAL_DEVICE_SENSOR_MAGNETIC_FIELD, "magnetic_field");
+    hLin  = open_sensor(HAL_DEVICE_SENSOR_LINEAR_ACCELERATION, "linear_acceleration");
+    fdAccel = sensor_fd(hAccel);
+    fdGyro  = sensor_fd(hGyro);
+    fdMag   = sensor_fd(hMag);
+    fdLin   = sensor_fd(hLin);
+    if (g_verbose) fprintf(stderr, "sensord: sensors open (accelFd=%d gyroFd=%d)\n", fdAccel, fdGyro);
+    return 0;
+}
+
 /* Engine control. The Enyo app runs as luna inside LunaSysMgr and cannot exec, and anything routed
  * through BrowserServer is dead once BS wedges (atlas-wpe-env#3) — so a loopback HTTP GET here is how
  * it asks for a restart. We are the only root daemon in the package and we do not depend on BS.
@@ -175,15 +207,8 @@ int main(int argc, char **argv)
     if (argc > 1 && strcmp(argv[1], "-v") == 0) g_verbose = 1;
     signal(SIGINT, on_sig); signal(SIGTERM, on_sig); signal(SIGPIPE, SIG_IGN);
 
-    hal_device_handle_t hAccel = open_sensor(HAL_DEVICE_SENSOR_ACCELERATION, "acceleration");
-    hal_device_handle_t hGyro  = open_sensor(HAL_DEVICE_SENSOR_ANGULAR_VELOCITY, "angular_velocity");
-    hal_device_handle_t hMag   = open_sensor(HAL_DEVICE_SENSOR_MAGNETIC_FIELD, "magnetic_field");
-    hal_device_handle_t hLin   = open_sensor(HAL_DEVICE_SENSOR_LINEAR_ACCELERATION, "linear_acceleration");
-    if (!hAccel) { fprintf(stderr, "sensord: no accelerometer — fatal\n"); return 1; }
-    int fdAccel = sensor_fd(hAccel);
-    int fdGyro  = sensor_fd(hGyro);   /* all but accel are optional — a missing sensor just leaves its axes 0 */
-    int fdMag   = sensor_fd(hMag);
-    int fdLin   = sensor_fd(hLin);
+    // -v prints samples without a client, so it keeps the sensors open from the start
+    if (g_verbose && sensors_open() < 0) return 1;
 
     /* Unix listening socket */
     unlink(SOCK_PATH);
@@ -193,7 +218,7 @@ int main(int argc, char **argv)
     if (bind(srv, (struct sockaddr*)&sa, sizeof sa) < 0) { perror("sensord: bind"); return 1; }
     chmod(SOCK_PATH, 0666);
     listen(srv, MAX_CLIENTS);
-    if (g_verbose) fprintf(stderr, "sensord: listening on %s (accelFd=%d gyroFd=%d)\n", SOCK_PATH, fdAccel, fdGyro);
+    if (g_verbose) fprintf(stderr, "sensord: listening on %s\n", SOCK_PATH);
 
     /* Control socket. Not fatal if it fails — the sensor bridge still works without it. */
     int ctl = socket(AF_INET, SOCK_STREAM, 0);
@@ -214,6 +239,7 @@ int main(int argc, char **argv)
 
     int clients[MAX_CLIENTS]; int nclient = 0;
     float ax=0,ay=0,az=0, gx=0,gy=0,gz=0, mx=0,my=0,mz=0, lx=0,ly=0,lz=0;
+    int have_accel = 0;   // no line goes out before the first accelerometer sample since the sensors opened
 
     while (g_run) {
         struct pollfd pfd[6 + MAX_CLIENTS]; int n = 0;
@@ -225,10 +251,18 @@ int main(int argc, char **argv)
         if (fdGyro  >= 0) { iGyr = n; pfd[n].fd = fdGyro;  pfd[n].events = POLLIN; n++; }
         if (fdMag   >= 0) { iMag = n; pfd[n].fd = fdMag;   pfd[n].events = POLLIN; n++; }
         if (fdLin   >= 0) { iLin = n; pfd[n].fd = fdLin;   pfd[n].events = POLLIN; n++; }
+        int iCli = n;
         for (int i = 0; i < nclient; i++) { pfd[n].fd = clients[i]; pfd[n].events = 0; n++; }
 
         int r = poll(pfd, n, 1000);
         if (r < 0) { if (errno == EINTR) continue; break; }
+
+        // Drop hung-up clients now, since closed sensors mean no failed write will find them
+        for (int i = nclient - 1; i >= 0; i--) {
+            if (pfd[iCli + i].revents & (POLLHUP | POLLERR | POLLNVAL)) {
+                close(clients[i]); clients[i] = clients[--nclient];
+            }
+        }
 
         /* engine restart request */
         if (iCtl >= 0 && (pfd[iCtl].revents & POLLIN)) {
@@ -247,17 +281,24 @@ int main(int argc, char **argv)
                  * samples for it (EAGAIN) rather than block the whole daemon — which would freeze every
                  * client's stream. Sensor data is latest-wins, so dropping a few stale samples is fine. */
                 fcntl(c, F_SETFL, O_NONBLOCK);
-                if (nclient < MAX_CLIENTS) clients[nclient++] = c; else close(c);
+                if (nclient < MAX_CLIENTS) {
+                    clients[nclient++] = c;
+                    // First client opens the sensors and starts from fresh samples
+                    if (!hAccel && sensors_open() == 0) {
+                        ax=ay=az=gx=gy=gz=mx=my=mz=lx=ly=lz=0;
+                        have_accel = 0;
+                    }
+                } else close(c);
             }
         }
 
         int updated = 0;
-        if (iAcc >= 0 && (pfd[iAcc].revents & POLLIN)) { drain_accel(hAccel, &ax, &ay, &az); updated = 1; }
+        if (iAcc >= 0 && (pfd[iAcc].revents & POLLIN)) { drain_accel(hAccel, &ax, &ay, &az); updated = 1; have_accel = 1; }
         if (iGyr >= 0 && (pfd[iGyr].revents & POLLIN)) { drain_gyro(hGyro, &gx, &gy, &gz); updated = 1; }
         if (iMag >= 0 && (pfd[iMag].revents & POLLIN)) { drain_mag(hMag, &mx, &my, &mz); updated = 1; }
         if (iLin >= 0 && (pfd[iLin].revents & POLLIN)) { drain_lin(hLin, &lx, &ly, &lz); updated = 1; }
 
-        if (updated) {
+        if (updated && have_accel) {
             char line[256];
             /* S ax ay az gx gy gz mx my mz lx ly lz  (accel g, gyro rad/s, mag uT, linear m/s^2) */
             int len = snprintf(line, sizeof line,
@@ -270,13 +311,13 @@ int main(int argc, char **argv)
                 } else i++;
             }
         }
+
+        // Last client gone: close the sensors until the next one connects
+        if (nclient == 0 && hAccel && !g_verbose) sensors_close();
     }
 
     for (int i = 0; i < nclient; i++) close(clients[i]);
     close(srv); unlink(SOCK_PATH);
-    if (hAccel) hal_device_close(hAccel);
-    if (hGyro)  hal_device_close(hGyro);
-    if (hMag)   hal_device_close(hMag);
-    if (hLin)   hal_device_close(hLin);
+    sensors_close();
     return 0;
 }
